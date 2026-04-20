@@ -1,0 +1,33 @@
+menu "Carbon HiSLIP Instrument Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID (network name) for the ESP32 to connect to.
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+            WiFi password (WPA or WPA2) for the access point.
+
+    config DEVICE_SERIAL
+        string "Device Serial Number"
+        default "SN12345"
+        help
+            Serial number reported in *IDN? response.
+
+    config DEVICE_HOSTNAME
+        string "Device Hostname Prefix"
+        default "carbon-esp32-inst"
+        help
+            Hostname prefix for mDNS. MAC address will be appended for uniqueness.
+
+    config HISLIP_SYNC_PORT
+        int "HiSLIP TCP Listener Port"
+        default 4880
+        help
+            TCP listener port for HiSLIP data and control connections.
+
+endmenu

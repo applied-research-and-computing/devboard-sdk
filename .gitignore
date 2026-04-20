@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+managed_components/
+sdkconfig.old
+dependencies.lock.tmp
+*.pyc
+__pycache__/
+
+# SEB metadata (firmware assistant tool)
+SEB.MD
+.seb/
+plan-*.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local configuration (contains WiFi credentials)
+sdkconfig

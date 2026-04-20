@@ -1,0 +1,180 @@
+apiVersion: v1alpha1
+kind: InstrumentProfile
+metadata:
+  name: carbon-esp32-instrument
+  description: ESP32-based HiSLIP instrument with GPIO, ADC, and UART capabilities
+
+identity:
+  manufacturer: CARBON
+  model: ESP32-INSTRUMENT
+  firmwareVersion: v1.0.0
+  identityCommand: "*IDN?"
+
+connection:
+  protocol: hislip
+  busType: lan
+  defaultPort: 4880
+  terminator: "\n"
+  timeout: 5000
+
+capabilities:
+  digital:
+    - name: GPIO
+      description: General-purpose digital I/O control
+      pins: [2, 4, 5, 13, 14, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]
+  analog:
+    - name: ADC
+      description: Analog-to-digital conversion
+      channels: [0, 1, 2, 3, 4, 5, 6, 7]
+      resolution: 12
+      maxVoltage: 3.3
+  serial:
+    - name: UART
+      description: Serial UART passthrough
+      ports: [1]
+      baudRates: [9600, 19200, 38400, 57600, 115200]
+
+variables:
+  pin:
+    description: Safe ESP32 GPIO pin
+    type: int
+    default: 2
+  direction:
+    description: GPIO direction
+    type: enum
+    default: OUTPUT
+  state:
+    description: GPIO output state
+    type: int
+    default: 1
+  channel:
+    description: ADC1 channel
+    type: int
+    default: 0
+  uart_data:
+    description: UART1 payload
+    type: string
+    default: Hello
+  baud:
+    description: UART baud rate
+    type: int
+    default: 115200
+  databits:
+    description: UART data bits
+    type: int
+    default: 8
+  parity:
+    description: UART parity
+    type: enum
+    default: NONE
+  stopbits:
+    description: UART stop bits
+    type: int
+    default: 1
+
+commands:
+  - id: identify
+    name: Identify
+    type: read
+    group: Standard
+    command: "*IDN?"
+    response:
+      type: string
+    timeout: 5000
+
+  - id: reset
+    name: Reset
+    type: write
+    group: Standard
+    command: "*RST"
+    timeout: 5000
+
+  - id: clear_status
+    name: Clear Status
+    type: write
+    group: Standard
+    command: "*CLS"
+    timeout: 5000
+
+  - id: self_test
+    name: Self Test
+    type: read
+    group: Standard
+    command: "*TST?"
+    response:
+      type: int
+    timeout: 5000
+
+  - id: operation_complete
+    name: Operation Complete
+    type: read
+    group: Standard
+    command: "*OPC?"
+    response:
+      type: int
+    timeout: 5000
+
+  - id: gpio_config
+    name: Configure GPIO
+    type: write
+    group: GPIO
+    command: "GPIO:CONFIG {pin} {direction}"
+    timeout: 5000
+
+  - id: gpio_set
+    name: Set GPIO
+    type: write
+    group: GPIO
+    command: "GPIO:SET {pin} {state}"
+    timeout: 5000
+
+  - id: gpio_get
+    name: Get GPIO
+    type: read
+    group: GPIO
+    command: "GPIO:GET? {pin}"
+    response:
+      type: int
+    timeout: 5000
+
+  - id: adc_read
+    name: Read ADC
+    type: read
+    group: ADC
+    command: "ADC:READ? {channel}"
+    response:
+      type: float
+      unit: V
+    timeout: 5000
+
+  - id: uart_write
+    name: Write UART
+    type: write
+    group: UART
+    command: "UART:WRITE {uart_data}"
+    timeout: 5000
+
+  - id: uart_read
+    name: Read UART
+    type: read
+    group: UART
+    command: "UART:READ?"
+    response:
+      type: string
+    timeout: 5000
+
+  - id: uart_config
+    name: Configure UART
+    type: write
+    group: UART
+    command: "UART:CONFIG {baud} {databits} {parity} {stopbits}"
+    timeout: 5000
+
+discovery:
+  mdns:
+    serviceType: _hislip._tcp
+    txtRecords:
+      model: ESP32-INSTRUMENT
+      vendor: Carbon
+      version: "1.0"
+      capabilities: GPIO,ADC,UART
