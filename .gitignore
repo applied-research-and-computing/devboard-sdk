@@ -20,3 +20,6 @@ plan-*.md
 
 # Local configuration (contains WiFi credentials)
 sdkconfig
+
+# for dev
+plugin_prompts

@@ -241,3 +241,9 @@ Contributions welcome! Please submit issues and pull requests to the project rep
 - [SCPI Standard (IEEE 488.2)](https://www.ivifoundation.org/docs/scpi-99.pdf)
 - [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/)
 - [ESP32-WROOM-32 Datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32_datasheet_en.pdf)
+
+# Build sample application on the side
+- import sdk
+- timer + stopwatch
+- visa commands to stopwatch, start stop lap
+- firmware booted on side, expose method for controlling pins

@@ -7,6 +7,7 @@ idf_component_register(SRCS "main.c"
                             "scpi_adc.c"
                             "scpi_uart.c"
                             "mdns_service.c"
+                            "mdns_debug.c"
                        INCLUDE_DIRS "."
                        PRIV_REQUIRES esp_adc
                                      esp_driver_gpio

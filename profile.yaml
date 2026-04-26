@@ -73,7 +73,7 @@ variables:
     default: 1
 
 commands:
-  - id: identify
+  identify:
     name: Identify
     type: read
     group: Standard
@@ -82,21 +82,21 @@ commands:
       type: string
     timeout: 5000
 
-  - id: reset
+  reset:
     name: Reset
     type: write
     group: Standard
     command: "*RST"
     timeout: 5000
 
-  - id: clear_status
+  clear_status:
     name: Clear Status
     type: write
     group: Standard
     command: "*CLS"
     timeout: 5000
 
-  - id: self_test
+  self_test:
     name: Self Test
     type: read
     group: Standard
@@ -105,7 +105,7 @@ commands:
       type: int
     timeout: 5000
 
-  - id: operation_complete
+  operation_complete:
     name: Operation Complete
     type: read
     group: Standard
@@ -114,21 +114,21 @@ commands:
       type: int
     timeout: 5000
 
-  - id: gpio_config
+  gpio_config:
     name: Configure GPIO
     type: write
     group: GPIO
     command: "GPIO:CONFIG {pin} {direction}"
     timeout: 5000
 
-  - id: gpio_set
+  gpio_set:
     name: Set GPIO
     type: write
     group: GPIO
     command: "GPIO:SET {pin} {state}"
     timeout: 5000
 
-  - id: gpio_get
+  gpio_get:
     name: Get GPIO
     type: read
     group: GPIO
@@ -137,7 +137,7 @@ commands:
       type: int
     timeout: 5000
 
-  - id: adc_read
+  adc_read:
     name: Read ADC
     type: read
     group: ADC
@@ -147,14 +147,14 @@ commands:
       unit: V
     timeout: 5000
 
-  - id: uart_write
+  uart_write:
     name: Write UART
     type: write
     group: UART
     command: "UART:WRITE {uart_data}"
     timeout: 5000
 
-  - id: uart_read
+  uart_read:
     name: Read UART
     type: read
     group: UART
@@ -163,7 +163,7 @@ commands:
       type: string
     timeout: 5000
 
-  - id: uart_config
+  uart_config:
     name: Configure UART
     type: write
     group: UART

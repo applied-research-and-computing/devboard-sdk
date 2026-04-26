@@ -18,6 +18,7 @@
 #include "scpi_parser.h"
 #include "hislip_server.h"
 #include "mdns_service.h"
+#include "mdns_debug.h"
 
 /* WiFi configuration - will be replaced with Kconfig in Phase 5 */
 #define WIFI_SSID      CONFIG_WIFI_SSID
@@ -142,6 +143,10 @@ void app_main(void)
 
     /* Initialize mDNS service advertisement */
     ESP_ERROR_CHECK(mdns_service_init());
+    
+    /* Print mDNS diagnostics */
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for mDNS to fully initialize
+    mdns_print_diagnostics();
 
     /* Initialize SCPI subsystem */
     scpi_init();
