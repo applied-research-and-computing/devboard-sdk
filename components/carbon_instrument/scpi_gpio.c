@@ -76,9 +76,9 @@ void scpi_gpio_init(void)
             .description  = "Set digital output level",
             .params       = {
                 { .name = "pin",   .type = CARBON_PARAM_INT, .min = 2, .max = 33,
-                  .description = "GPIO pin number" },
+                  .description = "GPIO pin number", .default_value = "2" },
                 { .name = "value", .type = CARBON_PARAM_INT, .min = 0, .max = 1,
-                  .description = "Output level (0 or 1)" },
+                  .description = "Output level (0 or 1)", .default_value = "0" },
             },
             .param_count  = 2,
             .timeout_ms   = 100,
@@ -91,7 +91,7 @@ void scpi_gpio_init(void)
             .description  = "Read digital pin level",
             .params       = {
                 { .name = "pin", .type = CARBON_PARAM_INT, .min = 2, .max = 33,
-                  .description = "GPIO pin number" },
+                  .description = "GPIO pin number", .default_value = "2" },
             },
             .param_count  = 1,
             .timeout_ms   = 100,
@@ -104,10 +104,10 @@ void scpi_gpio_init(void)
             .description  = "Configure GPIO pin direction",
             .params       = {
                 { .name = "pin",       .type = CARBON_PARAM_INT,  .min = 2, .max = 33,
-                  .description = "GPIO pin number" },
+                  .description = "GPIO pin number", .default_value = "2" },
                 { .name = "direction", .type = CARBON_PARAM_ENUM,
                   .enum_values = {"INPUT", "OUTPUT"}, .enum_count = 2,
-                  .description = "Pin direction" },
+                  .description = "Pin direction", .default_value = "OUTPUT" },
             },
             .param_count  = 2,
             .timeout_ms   = 100,

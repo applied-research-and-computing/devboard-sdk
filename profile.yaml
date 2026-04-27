@@ -1,174 +1,233 @@
+# Carbon Instrument Profile
+# Generated from carbon-esp32-inst-531c.local  (CARBON ESP32-INSTRUMENT  s/n SN12345)
+
 apiVersion: v1alpha1
-kind: InstrumentProfile
-metadata:
-  name: carbon-esp32-instrument
-  description: ESP32-based HiSLIP instrument with GPIO, ADC, and UART capabilities
 
 identity:
   manufacturer: CARBON
   model: ESP32-INSTRUMENT
-  firmwareVersion: v1.0.0
   identityCommand: "*IDN?"
 
-connection:
-  protocol: hislip
-  busType: lan
-  defaultPort: 4880
-  terminator: "\n"
-  timeout: 5000
+metadata:
+  description: CARBON ESP32-INSTRUMENT instrument
 
-capabilities:
-  digital:
-    - name: GPIO
-      description: General-purpose digital I/O control
-      pins: [2, 4, 5, 13, 14, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]
-  analog:
-    - name: ADC
-      description: Analog-to-digital conversion
-      channels: [0, 1, 2, 3, 4, 5, 6, 7]
-      resolution: 12
-      maxVoltage: 3.3
-  serial:
-    - name: UART
-      description: Serial UART passthrough
-      ports: [1]
-      baudRates: [9600, 19200, 38400, 57600, 115200]
+connection:
+  terminator: "\n"
+  bus:
+    - type: lan
+      defaultPort: 4880
+      timeout: 5000
+
+# TODO: fill in hardware capabilities (cannot be derived from commands alone)
+# capabilities:
+#   digital:
+#     - name: GPIO
+#       pins: [2, 4, 5, 13, 14, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]
+#   analog:
+#     - name: ADC
+#       channels: [0, 1, 2, 3, 4, 5, 6, 7]
+#       resolution: 12
+#       maxVoltage: 3.3
+#   serial:
+#     - name: UART
+#       ports: [1]
+#       baudRates: [9600, 19200, 38400, 57600, 115200]
 
 variables:
-  pin:
-    description: Safe ESP32 GPIO pin
-    type: int
-    default: 2
-  direction:
-    description: GPIO direction
-    type: enum
-    default: OUTPUT
-  state:
-    description: GPIO output state
-    type: int
-    default: 1
-  channel:
-    description: ADC1 channel
+  mask:
+    description: Enable register bitmask
     type: int
     default: 0
-  uart_data:
-    description: UART1 payload
-    type: string
-    default: Hello
+  pin:
+    description: GPIO pin number
+    type: int
+    default: 2
+  value:
+    description: Output level (0 or 1)
+    type: int
+    default: 0
+  direction:
+    description: Pin direction
+    type: enum
+    options:
+      - value: INPUT
+        description: INPUT
+      - value: OUTPUT
+        description: OUTPUT
+    default: OUTPUT
+  channel:
+    description: ADC1 channel (0=GPIO36..7=GPIO35)
+    type: int
+    default: 0
   baud:
-    description: UART baud rate
+    description: Baud rate
     type: int
     default: 115200
-  databits:
-    description: UART data bits
+  data_bits:
+    description: Data bits (5-8)
     type: int
     default: 8
   parity:
-    description: UART parity
+    description: Parity
     type: enum
+    options:
+      - value: NONE
+        description: NONE
+      - value: EVEN
+        description: EVEN
+      - value: ODD
+        description: ODD
     default: NONE
-  stopbits:
-    description: UART stop bits
+  stop_bits:
+    description: Stop bits (1 or 2)
     type: int
     default: 1
 
 commands:
   identify:
-    name: Identify
+    description: Identify instrument
     type: read
-    group: Standard
+    group: IEEE488
     command: "*IDN?"
     response:
-      type: string
-    timeout: 5000
+      type: enum
+    timeout: 500
 
   reset:
-    name: Reset
+    description: Reset to defaults
     type: write
-    group: Standard
+    group: IEEE488
     command: "*RST"
-    timeout: 5000
+    timeout: 1000
 
   clear_status:
-    name: Clear Status
+    description: Clear status registers
     type: write
-    group: Standard
+    group: IEEE488
     command: "*CLS"
-    timeout: 5000
+    timeout: 500
+
+  event_status_register:
+    description: Read event status register
+    type: read
+    group: IEEE488
+    command: "*ESR?"
+    response:
+      type: int
+    timeout: 500
+
+  event_status_enable_query:
+    description: Read event status enable
+    type: read
+    group: IEEE488
+    command: "*ESE?"
+    response:
+      type: int
+    timeout: 500
+
+  event_status_enable:
+    description: Set event status enable mask
+    type: write
+    group: IEEE488
+    command: "*ESE {mask}"
+    timeout: 500
+
+  operation_complete:
+    description: Operation complete query
+    type: read
+    group: IEEE488
+    command: "*OPC?"
+    response:
+      type: bool
+    timeout: 500
 
   self_test:
-    name: Self Test
+    description: Self-test query
     type: read
-    group: Standard
+    group: IEEE488
     command: "*TST?"
     response:
       type: int
-    timeout: 5000
+    timeout: 2000
 
-  operation_complete:
-    name: Operation Complete
-    type: read
-    group: Standard
-    command: "*OPC?"
-    response:
-      type: int
-    timeout: 5000
-
-  gpio_config:
-    name: Configure GPIO
+  wait:
+    description: Wait to continue
     type: write
-    group: GPIO
-    command: "GPIO:CONFIG {pin} {direction}"
-    timeout: 5000
+    group: IEEE488
+    command: "*WAI"
+    timeout: 500
 
   gpio_set:
-    name: Set GPIO
+    description: Set digital output level
     type: write
     group: GPIO
-    command: "GPIO:SET {pin} {state}"
-    timeout: 5000
+    command: "GPIO:SET {pin} {value}"
+    timeout: 100
 
   gpio_get:
-    name: Get GPIO
+    description: Read digital pin level
     type: read
     group: GPIO
     command: "GPIO:GET? {pin}"
     response:
-      type: int
-    timeout: 5000
+      type: bool
+    timeout: 100
+
+  gpio_config:
+    description: Configure GPIO pin direction
+    type: write
+    group: GPIO
+    command: "GPIO:CONFIG {pin} {direction}"
+    timeout: 100
 
   adc_read:
-    name: Read ADC
+    description: Read ADC channel voltage in volts
     type: read
     group: ADC
     command: "ADC:READ? {channel}"
     response:
       type: float
       unit: V
-    timeout: 5000
+    timeout: 500
 
   uart_write:
-    name: Write UART
+    description: Write data to UART1
     type: write
     group: UART
-    command: "UART:WRITE {uart_data}"
-    timeout: 5000
+    command: "UART:WRITE"
+    timeout: 500
 
   uart_read:
-    name: Read UART
+    description: Read available bytes from UART1 (100ms timeout)
     type: read
     group: UART
     command: "UART:READ?"
     response:
-      type: string
-    timeout: 5000
+      type: enum
+    timeout: 500
 
   uart_config:
-    name: Configure UART
+    description: Configure UART1 parameters
     type: write
     group: UART
-    command: "UART:CONFIG {baud} {databits} {parity} {stopbits}"
-    timeout: 5000
+    command: "UART:CONFIG {baud} {data_bits} {parity} {stop_bits}"
+    timeout: 500
+
+  error_query:
+    description: Read error from SCPI error queue
+    type: read
+    group: IEEE488
+    command: "SYST:ERR?"
+    response:
+      type: tuple
+      fields:
+        - name: code
+          type: int
+          description: Error code (0 = no error)
+        - name: message
+          type: enum
+          description: Error message string
+    timeout: 500
 
 discovery:
   mdns:
@@ -177,4 +236,3 @@ discovery:
       model: ESP32-INSTRUMENT
       vendor: Carbon
       version: "1.0"
-      capabilities: GPIO,ADC,UART

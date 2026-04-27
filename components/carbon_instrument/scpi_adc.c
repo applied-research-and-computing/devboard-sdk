@@ -104,7 +104,7 @@ void scpi_adc_init(void)
         .description  = "Read ADC channel voltage in volts",
         .params       = {
             { .name = "channel", .type = CARBON_PARAM_INT, .min = 0, .max = 7,
-              .description = "ADC1 channel (0=GPIO36..7=GPIO35)" },
+              .description = "ADC1 channel (0=GPIO36..7=GPIO35)", .default_value = "0" },
         },
         .param_count  = 1,
         .timeout_ms   = 500,
