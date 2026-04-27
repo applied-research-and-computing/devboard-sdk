@@ -1,6 +1,6 @@
 # ESP32 HiSLIP Instrument Server
 
-A HiSLIP (High-Speed LAN Instrument Protocol) server implementation for ESP32-WROOM-32, providing remote control of GPIO, ADC, and UART peripherals via SCPI commands over TCP/IP.
+A HiSLIP (High-Speed LAN Instrument Protocol) server implementation for ESP32-32, providing remote control of GPIO, ADC, and UART peripherals via SCPI commands over TCP/IP.
 
 ## Features
 
