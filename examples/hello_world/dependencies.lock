@@ -1,0 +1,17 @@
+dependencies:
+  espressif/mdns:
+    dependencies: []
+    source:
+      path: ../../managed_components/espressif__mdns
+      type: local
+    version: 1.11.0
+  idf:
+    source:
+      type: idf
+    version: 6.0.0
+direct_dependencies:
+- espressif/mdns
+- idf
+manifest_hash: f7f7af5c4339bc17c93bbddd0f0928b5e01925e82856beff678e187901c0b8df
+target: esp32
+version: 3.0.0

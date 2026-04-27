@@ -3,7 +3,7 @@
 # Tests mDNS discovery and HiSLIP protocol connectivity
 
 HOSTNAME="${1:-carbon-esp32-inst.local}"
-CARBON_CLI="${2:-/home/hugo/Documents/ARNC/carbon/monorepo/packages/carbon-cli/carbon-linux}"
+CARBON_CLI="${2:-/home/hugo/Documents/ARNC/carbon/monorepo/packages/carbon-cli/carbon}"
 
 echo "=========================================="
 echo "Carbon ESP32 Integration Test"
@@ -17,8 +17,8 @@ echo "[1] Validating Carbon instrument profile..."
 PROFILE="$(dirname "$0")/carbon_esp32_instrument.yaml"
 if [ -f "$PROFILE" ]; then
     if [ -x "$CARBON_CLI" ]; then
-        echo "  > $CARBON_CLI validate --file $PROFILE"
-        "$CARBON_CLI" validate --file "$PROFILE" 2>&1 && echo "[+] Profile validation passed" || echo "[!] Profile validation had issues"
+        echo "  > $CARBON_CLI validate $PROFILE"
+        "$CARBON_CLI" validate "$PROFILE" 2>&1 && echo "[+] Profile validation passed" || echo "[!] Profile validation had issues"
     else
         echo "  [!] Carbon CLI not executable, checking YAML syntax..."
         if command -v yq &> /dev/null; then
