@@ -1,24 +1,15 @@
 #include "carbon_instrument.h"
 #include <string.h>
 #include <stdio.h>
-#include "sdkconfig.h"
 #include "esp_log.h"
 
 static const char *TAG = "scpi_std";
 
-#define MANUFACTURER     "CARBON"
-#define MODEL            "ESP32-INSTRUMENT"
-#define FIRMWARE_VERSION "v1.0.0"
-
-#ifndef CONFIG_DEVICE_SERIAL
-#define DEVICE_SERIAL "SN12345"
-#else
-#define DEVICE_SERIAL CONFIG_DEVICE_SERIAL
-#endif
-
 static int idn_handler(const char *cmd, char *r, size_t n)
 {
-    snprintf(r, n, MANUFACTURER "," MODEL "," DEVICE_SERIAL "," FIRMWARE_VERSION);
+    const carbon_instrument_config_t *cfg = carbon_instrument_get_config();
+    snprintf(r, n, "%s,%s,%s,%s",
+             cfg->manufacturer, cfg->model, cfg->serial, cfg->firmware_version);
     return strlen(r);
 }
 

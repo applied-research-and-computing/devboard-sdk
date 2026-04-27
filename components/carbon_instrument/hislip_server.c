@@ -27,7 +27,7 @@ static const char *TAG = "hislip_server";
 #define HISLIP_ACCEPT_TASK_STACK_SIZE 4096
 #define HISLIP_CLIENT_TASK_STACK_SIZE 6144
 #define HISLIP_TASK_PRIORITY (tskIDLE_PRIORITY + 5)
-#define SCPI_RESPONSE_BUF_SIZE 4096
+#define SCPI_RESPONSE_BUF_SIZE 8192
 #define SOCKET_TIMEOUT_SEC 10
 
 typedef struct {

@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <ctype.h>
 
+#define CMD_BUF_SIZE 256
+
 static void str_toupper_command(char *str)
 {
     while (*str && !isspace((unsigned char)*str)) {
@@ -26,7 +28,12 @@ int scpi_parse_command(const char *cmd_str, char *response_buf, size_t response_
 {
     if (!cmd_str || !response_buf || response_max_len == 0) return 0;
 
-    char cmd_copy[256];
+    if (strlen(cmd_str) >= CMD_BUF_SIZE) {
+        snprintf(response_buf, response_max_len, "ERROR: Command too long");
+        return strlen(response_buf);
+    }
+
+    char cmd_copy[CMD_BUF_SIZE];
     strncpy(cmd_copy, cmd_str, sizeof(cmd_copy) - 1);
     cmd_copy[sizeof(cmd_copy) - 1] = '\0';
 

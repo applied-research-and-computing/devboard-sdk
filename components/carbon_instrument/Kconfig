@@ -1,0 +1,32 @@
+menu "Carbon Instrument SDK"
+
+    config CARBON_MAX_COMMANDS
+        int "Maximum registered commands"
+        default 64
+        range 8 256
+        help
+            Maximum number of SCPI commands that can be registered.
+            Increase if you have more than 64 custom commands.
+
+    config CARBON_ENABLE_GPIO
+        bool "Enable built-in GPIO commands"
+        default y
+        help
+            Compile in GPIO:SET, GPIO:GET?, and GPIO:CONFIG commands.
+            Disable to reduce firmware size on devices that don't use GPIO.
+
+    config CARBON_ENABLE_ADC
+        bool "Enable built-in ADC commands"
+        default y
+        help
+            Compile in ADC:READ? command.
+            Disable to reduce firmware size on devices that don't use ADC.
+
+    config CARBON_ENABLE_UART
+        bool "Enable built-in UART commands"
+        default y
+        help
+            Compile in UART:WRITE, UART:READ?, and UART:CONFIG commands.
+            Disable to reduce firmware size on devices that don't use UART passthrough.
+
+endmenu

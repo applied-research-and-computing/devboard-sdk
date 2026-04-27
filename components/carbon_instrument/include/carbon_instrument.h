@@ -47,10 +47,25 @@ typedef struct {
     carbon_cmd_handler_t  handler;
 } carbon_cmd_descriptor_t;
 
+// Device identity. Any NULL field falls back to the Kconfig/firmware default.
+typedef struct {
+    const char *manufacturer;
+    const char *model;
+    const char *serial;
+    const char *firmware_version;
+} carbon_instrument_config_t;
+
+// Optional: override device identity before carbon_instrument_start().
+// Any non-NULL field in config replaces the default.
+void carbon_instrument_init(const carbon_instrument_config_t *config);
+
+// Returns the active identity configuration.
+const carbon_instrument_config_t *carbon_instrument_get_config(void);
+
 // Register a command with the instrument registry.
 // desc must point to storage that outlives the call (use static const).
 esp_err_t carbon_register_command(const carbon_cmd_descriptor_t *desc);
 
-// Start HiSLIP server and all instrument services.
+// Register built-in commands and start the HiSLIP server.
 // Call after registering any custom commands.
 void carbon_instrument_start(void);

@@ -28,7 +28,7 @@ static int gpio_set_handler(const char *cmd, char *r, size_t n)
     }
     if (!is_valid_pin(pin)) { snprintf(r, n, "ERROR: Invalid pin %d", pin); return strlen(r); }
     if (value != 0 && value != 1) { snprintf(r, n, "ERROR: Value must be 0 or 1"); return strlen(r); }
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_level(pin, value);
     ESP_LOGI(TAG, "GPIO%d = %d", pin, value);
     snprintf(r, n, "OK");
@@ -58,7 +58,7 @@ static int gpio_config_handler(const char *cmd, char *r, size_t n)
     if (!is_valid_pin(pin)) { snprintf(r, n, "ERROR: Invalid pin %d", pin); return strlen(r); }
     gpio_mode_t mode;
     if (strcasecmp(mode_str, "INPUT") == 0)       mode = GPIO_MODE_INPUT;
-    else if (strcasecmp(mode_str, "OUTPUT") == 0) mode = GPIO_MODE_OUTPUT;
+    else if (strcasecmp(mode_str, "OUTPUT") == 0) mode = GPIO_MODE_INPUT_OUTPUT;
     else { snprintf(r, n, "ERROR: Mode must be INPUT or OUTPUT"); return strlen(r); }
     gpio_set_direction(pin, mode);
     ESP_LOGI(TAG, "GPIO%d configured as %s", pin, mode_str);

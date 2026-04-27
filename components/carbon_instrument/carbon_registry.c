@@ -2,7 +2,11 @@
 #include "carbon_instrument.h"
 #include "esp_log.h"
 
+#ifdef CONFIG_CARBON_MAX_COMMANDS
+#define CARBON_MAX_COMMANDS CONFIG_CARBON_MAX_COMMANDS
+#else
 #define CARBON_MAX_COMMANDS 64
+#endif
 
 static const char *TAG = "carbon_registry";
 static const carbon_cmd_descriptor_t *s_registry[CARBON_MAX_COMMANDS];
