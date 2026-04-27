@@ -1,249 +1,330 @@
-# ESP32 HiSLIP Instrument Server
+# Carbon ESP32 Instrument SDK
 
-A HiSLIP (High-Speed LAN Instrument Protocol) server implementation for ESP32-32, providing remote control of GPIO, ADC, and UART peripherals via SCPI commands over TCP/IP.
+Turn any ESP32 into a Carbon-compatible instrument. You write handler functions for your hardware; the SDK handles the HiSLIP server, SCPI dispatch, mDNS discovery, and Carbon integration automatically.
 
-## Features
+## How It Works
 
-- **HiSLIP Protocol**: IEEE-1488 compliant instrument protocol over TCP/IP
-  - Single TCP listener on port 4880
-  - HiSLIP message type dispatch for synchronous data and asynchronous control messages
-- **SCPI Command Interface**: Standard IEEE 488.2 commands plus custom subsystems
-  - Standard: `*IDN?`, `*RST`, `*CLS`, `*TST?`, `*OPC?`, `*WAI`, `*ESR?`, `*ESE`
-  - GPIO: Configure pins, set/get digital I/O
-  - ADC: Read analog voltages
-  - UART: Serial passthrough for external devices
-- **mDNS Discovery**: Auto-discovery via `_hislip._tcp.local` service advertisement
-- **WiFi Connectivity**: Station mode with automatic reconnection
+1. Write a handler function for each command your device exposes
+2. Register each handler with a descriptor that names the command and describes its parameters
+3. Call `carbon_instrument_start()` — the SDK starts the HiSLIP server and advertises the device on the network
+4. The Carbon daemon discovers the device via mDNS and makes it available for test automation
+
+The SDK ships with built-in commands for GPIO, ADC, and UART. Custom commands sit alongside them — from Carbon's perspective they are indistinguishable.
 
 ## Hardware Requirements
 
-- **ESP32-WROOM-32** development board
+- **ESP32-WROOM-32** (or any ESP32 variant)
 - USB cable for programming and power
-- WiFi access point (2.4 GHz)
+- 2.4 GHz WiFi access point
 
 ## Software Prerequisites
 
 - **ESP-IDF v6.0** or later
 - Python 3.8+
-- Git
 
 ### Install ESP-IDF
 
 ```bash
-# Clone ESP-IDF
-mkdir -p ~/esp
-cd ~/esp
+mkdir -p ~/esp && cd ~/esp
 git clone --recursive https://github.com/espressif/esp-idf.git
-cd esp-idf
-git checkout v6.0
-
-# Install dependencies
+cd esp-idf && git checkout v6.0
 ./install.sh esp32
-
-# Activate environment (run this in every new terminal session)
 source ~/.espressif/tools/activate_idf_v6.0.sh
+```
+
+## Project Structure
+
+```
+carbon_esp32_sdk/
+├── components/
+│   └── carbon_instrument/          # SDK component (don't edit)
+│       ├── include/
+│       │   └── carbon_instrument.h # Public API — types + registration
+│       ├── carbon_instrument.c     # Startup orchestration
+│       ├── carbon_registry.c/h     # Command registry
+│       ├── hislip.c/h              # HiSLIP protocol framing
+│       ├── hislip_server.c/h       # TCP accept loop + session handling
+│       ├── scpi_parser.c/h         # Registry-based SCPI dispatch
+│       ├── scpi_standard.c         # Built-in IEEE 488.2 commands
+│       ├── scpi_gpio.c             # Built-in GPIO commands
+│       ├── scpi_adc.c              # Built-in ADC commands
+│       ├── scpi_uart.c             # Built-in UART commands
+│       ├── mdns_service.c/h        # mDNS advertisement
+│       └── CMakeLists.txt
+├── main/
+│   ├── main.c                      # WiFi init + carbon_instrument_start()
+│   ├── Kconfig.projbuild           # menuconfig options
+│   └── CMakeLists.txt
+└── CMakeLists.txt
 ```
 
 ## Build and Flash
 
-### 1. Configure WiFi Credentials
-
-```bash
-idf.py menuconfig
-```
-
-Navigate to: **Carbon HiSLIP Instrument Configuration**
-
-Set:
-- **WiFi SSID**: Your network name
-- **WiFi Password**: Your network password
-- **Device Serial Number**: Unique identifier (e.g., `SN12345`)
-- **Device Hostname Prefix**: mDNS hostname (default: `carbon-esp32-inst`)
-
-Save and exit (press `S`, then `Q`).
-
-### 2. Build Firmware
+### 1. Configure WiFi and Device Identity
 
 ```bash
 source ~/.espressif/tools/activate_idf_v6.0.sh
-idf.py build
+idf.py menuconfig
 ```
 
-### 3. Flash to ESP32
+Navigate to **Carbon HiSLIP Instrument Configuration** and set:
 
-Connect ESP32 via USB, then:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `WIFI_SSID` | WiFi network name | `myssid` |
+| `WIFI_PASSWORD` | WiFi password | `mypassword` |
+| `DEVICE_SERIAL` | Serial number in `*IDN?` response | `SN12345` |
+| `DEVICE_HOSTNAME` | mDNS hostname prefix (MAC suffix appended) | `carbon-esp32-inst` |
+| `HISLIP_SYNC_PORT` | TCP port | `4880` |
+
+### 2. Build and Flash
 
 ```bash
+idf.py build
 idf.py -p /dev/ttyUSB0 flash
 ```
 
-Replace `/dev/ttyUSB0` with your serial port:
-- **Linux**: `/dev/ttyUSB0` or `/dev/ttyACM0`
-- **macOS**: `/dev/cu.usbserial-*` or `/dev/cu.SLAB_USBtoUART`
-- **Windows**: `COM3`, `COM4`, etc.
+Port by platform: Linux `/dev/ttyUSB0`, macOS `/dev/cu.usbserial-*`, Windows `COM3`.
 
-### 4. Monitor Serial Output
+### 3. Monitor
 
 ```bash
 idf.py -p /dev/ttyUSB0 monitor
 ```
 
-Press `Ctrl+]` to exit monitor.
+Expected boot output:
+```
+I (xxxx) carbon_instrument: Registering built-in commands
+I (xxxx) carbon_instrument: Starting Carbon instrument services
+I (xxxx) mdns_service: HiSLIP service advertised on port 4880
+I (xxxx) carbon_instrument: Carbon instrument ready
+I (xxxx) hislip_server: HiSLIP listening on port 4880
+```
 
-## Usage
+Press `Ctrl+]` to exit.
 
-### Discover Instrument via mDNS
+## Adding Custom Commands
+
+Include `carbon_instrument.h`, write your handler, declare a descriptor, register it before calling `carbon_instrument_start()`.
+
+### Minimal example (`main/my_commands.c`)
+
+```c
+#include "carbon_instrument.h"
+#include <stdio.h>
+#include <string.h>
+
+// Handler receives the full normalized SCPI string and writes the response.
+// Returns the byte length of the response (0 = no response).
+static int pump_speed_handler(const char *cmd, char *r, size_t n)
+{
+    int speed;
+    sscanf(cmd + 11, "%d", &speed);  // skip "PUMP:SPEED "
+    set_pump_pwm(speed);             // your hardware call
+    snprintf(r, n, "OK");
+    return strlen(r);
+}
+
+static int temp_read_handler(const char *cmd, char *r, size_t n)
+{
+    float temp = read_temperature_sensor();  // your hardware call
+    snprintf(r, n, "%.2f", temp);
+    return strlen(r);
+}
+
+void register_my_commands(void)
+{
+    static const carbon_cmd_descriptor_t pump_cmd = {
+        .scpi_command = "PUMP:SPEED",
+        .type         = CARBON_CMD_WRITE,
+        .group        = "Pump",
+        .description  = "Set pump speed as a percentage",
+        .params       = {
+            { .name = "speed", .type = CARBON_PARAM_INT,
+              .min = 0, .max = 100, .description = "Speed %" },
+        },
+        .param_count  = 1,
+        .timeout_ms   = 500,
+        .handler      = pump_speed_handler,
+    };
+
+    static const carbon_cmd_descriptor_t temp_cmd = {
+        .scpi_command = "TEMP:READ?",
+        .type         = CARBON_CMD_QUERY,
+        .group        = "Sensors",
+        .description  = "Read temperature in Celsius",
+        .param_count  = 0,
+        .timeout_ms   = 1000,
+        .handler      = temp_read_handler,
+    };
+
+    carbon_register_command(&pump_cmd);
+    carbon_register_command(&temp_cmd);
+}
+```
+
+### Wire it into `main/main.c`
+
+```c
+#include "carbon_instrument.h"
+
+extern void register_my_commands(void);
+
+void app_main(void)
+{
+    // ... NVS and WiFi init (already present) ...
+
+    register_my_commands();       // register before starting
+    carbon_instrument_start();    // starts HiSLIP server
+}
+```
+
+### Descriptor fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scpi_command` | `const char *` | Uppercase SCPI mnemonic, e.g. `"PUMP:SPEED"` or `"TEMP:READ?"` |
+| `type` | `carbon_cmd_type_t` | `CARBON_CMD_WRITE` (no response expected by client) or `CARBON_CMD_QUERY` (response required) |
+| `group` | `const char *` | Logical grouping for YAML generation, e.g. `"Pump"` |
+| `description` | `const char *` | Human-readable description |
+| `params[]` | `carbon_param_t[8]` | Parameter descriptors (see below) |
+| `param_count` | `int` | Number of valid entries in `params` |
+| `timeout_ms` | `int` | Expected max execution time (used in YAML) |
+| `handler` | `carbon_cmd_handler_t` | Your function |
+
+### Parameter types
+
+| `carbon_param_type_t` | SCPI value format |
+|---|---|
+| `CARBON_PARAM_INT` | Integer; use `min`/`max` to constrain |
+| `CARBON_PARAM_FLOAT` | Floating point; use `min`/`max` to constrain |
+| `CARBON_PARAM_STRING` | Arbitrary string (e.g. for `UART:WRITE`) |
+| `CARBON_PARAM_BOOL` | `0` or `1` |
+| `CARBON_PARAM_ENUM` | One of the strings in `enum_values[]`; set `enum_count` |
+
+### Important: descriptor storage
+
+Descriptors must live for the entire program lifetime. Declare them `static const` at function scope or at file scope:
+
+```c
+// Correct — static storage duration
+static const carbon_cmd_descriptor_t my_cmd = { ... };
+carbon_register_command(&my_cmd);
+
+// Wrong — stack allocation, descriptor is invalid after the function returns
+carbon_cmd_descriptor_t my_cmd = { ... };  // no static
+carbon_register_command(&my_cmd);
+```
+
+## Built-in Commands
+
+These are registered automatically by the SDK on every device.
+
+### IEEE 488.2 Standard
+
+| Command | Type | Description |
+|---------|------|-------------|
+| `*IDN?` | Query | Identify instrument (`CARBON,ESP32-INSTRUMENT,<serial>,v1.0.0`) |
+| `*RST` | Write | Reset to defaults |
+| `*CLS` | Write | Clear status registers |
+| `*TST?` | Query | Self-test (returns `0`) |
+| `*OPC?` | Query | Operation complete (returns `1`) |
+| `*WAI` | Write | Wait to continue |
+| `*ESR?` | Query | Event status register |
+| `*ESE?` | Query | Event status enable register |
+| `*ESE <mask>` | Write | Set event status enable register |
+
+### GPIO
+
+| Command | Description |
+|---------|-------------|
+| `GPIO:CONFIG <pin> <INPUT\|OUTPUT>` | Set pin direction |
+| `GPIO:SET <pin> <0\|1>` | Set output level |
+| `GPIO:GET? <pin>` | Read pin level |
+
+Valid pins: 2, 4, 5, 13, 14, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33
+
+### ADC
+
+| Command | Description |
+|---------|-------------|
+| `ADC:READ? <channel>` | Read voltage in volts (12-bit, 0–3.3 V) |
+
+Channel mapping: 0=GPIO36, 1=GPIO37, 2=GPIO38, 3=GPIO39, 4=GPIO32, 5=GPIO33, 6=GPIO34, 7=GPIO35
+
+### UART (UART1, TX=GPIO17, RX=GPIO16)
+
+| Command | Description |
+|---------|-------------|
+| `UART:WRITE <data>` | Write string to UART1 |
+| `UART:READ?` | Read available bytes (100 ms timeout) |
+| `UART:CONFIG <baud> <bits> <parity> <stop>` | Configure port (e.g. `115200 8 NONE 1`) |
+
+## Connecting via HiSLIP
+
+Any HiSLIP client (VISA, Python socket, Carbon CLI) can connect on port 4880.
+
+### Discover on the network
 
 ```bash
-# Linux/macOS
+# Linux
 avahi-browse -r _hislip._tcp
 
-# macOS (alternative)
+# macOS
 dns-sd -B _hislip._tcp
 ```
 
-Look for hostname like `carbon-esp32-inst-aabbcc.local` (MAC address appended).
+The hostname is `<DEVICE_HOSTNAME>-<last4ofMAC>.local`, e.g. `carbon-esp32-inst-531c.local`.
 
-### Connect via HiSLIP
-
-Use any HiSLIP-compatible client or raw TCP socket on **port 4880**.
-
-#### Example: Python Socket Client
+### Python test client
 
 ```python
-import socket
-import struct
+import socket, struct
 
-# Connect to the HiSLIP listener
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect(('carbon-esp32-inst-aabbcc.local', 4880))
+def hislip_connect(host, port=4880):
+    s = socket.socket()
+    s.connect((host, port))
+    s.send(struct.pack(">2sBBIQ", b"HS", 0, 0, 0x00010000, 0))  # Initialize
+    s.recv(1024)
+    return s
 
-# Send Initialize message (HiSLIP handshake)
-# Message format: [Prologue: 2 bytes 'HS'] [Type: 1 byte] [Control: 1 byte] 
-#                 [MessageParameter: 4 bytes] [PayloadLength: 8 bytes] [Payload]
-init_msg = struct.pack(">2sBBIQ", b"HS", 0, 0, 0x00010000, 0)
-sock.send(init_msg)
-response = sock.recv(1024)
-print("Initialize response:", response.hex())
+def hislip_send(s, command):
+    payload = command.encode() + b"\n"
+    s.send(struct.pack(">2sBBIQ", b"HS", 7, 0, 1, len(payload)) + payload)
+    resp = s.recv(4096)
+    return resp[16:].decode().strip()  # skip 16-byte header
 
-# Send SCPI command via DataEnd message (type 7)
-scpi_cmd = b'*IDN?\n'
-data_msg = struct.pack(">2sBBIQ", b"HS", 7, 0, 0, len(scpi_cmd)) + scpi_cmd
-sock.send(data_msg)
-response = sock.recv(1024)
-print("SCPI response:", response)
-
-sock.close()
+s = hislip_connect("carbon-esp32-inst-531c.local")
+print(hislip_send(s, "*IDN?"))
+print(hislip_send(s, "GPIO:SET 2 1"))
+print(hislip_send(s, "ADC:READ? 0"))
+s.close()
 ```
-
-### SCPI Command Examples
-
-| Command | Description | Example Response |
-|---------|-------------|------------------|
-| `*IDN?` | Identify instrument | `CARBON,ESP32-INSTRUMENT,SN12345,v1.0.0` |
-| `*RST` | Reset to defaults | `OK` |
-| `*TST?` | Run self-test | `0` |
-| `GPIO:CONFIG 2 OUTPUT` | Set GPIO2 as output | `OK` |
-| `GPIO:SET 2 1` | Set GPIO2 high | `OK` |
-| `GPIO:GET? 2` | Read GPIO2 state | `1` |
-| `ADC:READ? 0` | Read ADC channel 0 | `1.234` (volts) |
-| `UART:WRITE Hello` | Write to UART1 | `OK` |
-| `UART:READ?` | Read available bytes from UART1 | `<data>` |
-| `UART:CONFIG 115200 8 NONE 1` | Configure UART1 | `OK` |
-
-## Project Structure
-
-```
-devboard_sdk/
-├── main/
-│   ├── main.c                  # Application entry point
-│   ├── hislip.h/c              # HiSLIP message framing
-│   ├── hislip_server.h/c       # HiSLIP server (accept loop, channel routing)
-│   ├── scpi_parser.h/c         # SCPI command parser
-│   ├── scpi_standard.c         # IEEE 488.2 standard commands
-│   ├── scpi_gpio.c             # GPIO control commands
-│   ├── scpi_adc.c              # ADC measurement commands
-│   ├── scpi_uart.c             # UART passthrough commands
-│   ├── mdns_service.h/c        # mDNS service advertisement
-│   ├── CMakeLists.txt          # Component build config
-│   └── Kconfig.projbuild       # Menuconfig options
-├── CMakeLists.txt              # Top-level build config
-├── sdkconfig                   # ESP-IDF configuration (generated)
-├── carbon_esp32_instrument.yaml # Carbon platform instrument profile
-├── plan-esp32-hislip-instrument.md # Implementation plan
-├── SEB.MD                      # Project metadata
-└── README.md                   # This file
-```
-
-## Configuration Options
-
-All options accessible via `idf.py menuconfig` → **Carbon HiSLIP Instrument Configuration**:
-
-- `WIFI_SSID`: WiFi network name
-- `WIFI_PASSWORD`: WiFi password
-- `DEVICE_SERIAL`: Serial number for `*IDN?` response
-- `DEVICE_HOSTNAME`: mDNS hostname prefix
-- `HISLIP_SYNC_PORT`: HiSLIP TCP listener port (default: 4880)
-
-## Troubleshooting
-
-### WiFi Connection Fails
-
-- Check SSID/password in menuconfig
-- Ensure 2.4 GHz WiFi (ESP32 doesn't support 5 GHz)
-- Monitor serial output: `idf.py monitor`
-
-### mDNS Discovery Not Working
-
-- Ensure client and ESP32 are on same network/VLAN
-- Some corporate networks block mDNS (port 5353 UDP)
-- Try direct IP connection instead (check serial monitor for assigned IP)
-
-### Build Errors
-
-- Ensure ESP-IDF environment is activated: `source ~/.espressif/tools/activate_idf_v6.0.sh`
-- Clean build: `idf.py fullclean && idf.py build`
-- Check ESP-IDF version: `idf.py --version` (should be v6.0+)
-
-### HiSLIP Connection Refused
-
-- Verify ESP32 has IP address (check serial monitor)
-- Test TCP connectivity: `nc -zv <ip> 4880`
-- Check firewall rules on client machine
 
 ## Carbon Platform Integration
 
-This instrument is designed for use with the **Carbon** test automation platform. The included `carbon_esp32_instrument.yaml` profile enables:
-
-- Auto-discovery via mDNS
-- Command auto-completion in Carbon CLI
-- Type-safe command generation
-- Integration with Carbon test scripts
-
-Place the YAML profile in your Carbon instruments directory and use:
+Once the device is running, use the Carbon CLI to connect and send commands:
 
 ```bash
-carbon instrument connect carbon-esp32-inst-aabbcc.local
+carbon instrument connect carbon-esp32-inst-531c.local
 carbon instrument send "*IDN?"
+carbon instrument send "GPIO:SET 2 1"
 ```
 
-## License
+A `profile.yaml` (auto-generation coming in a future SDK release) describes the device's commands to the Carbon daemon for auto-completion and type checking.
 
-MIT License - see project root for details.
+## Troubleshooting
 
-## Contributing
+**WiFi won't connect** — Check SSID/password in menuconfig. ESP32 only supports 2.4 GHz.
 
-Contributions welcome! Please submit issues and pull requests to the project repository.
+**mDNS not found** — Client and device must be on the same VLAN. Some corporate networks block mDNS (UDP 5353). Find the IP from the serial monitor and connect directly.
+
+**Build fails** — Ensure the IDF environment is active: `source ~/.espressif/tools/activate_idf_v6.0.sh`. For a clean rebuild: `idf.py fullclean && idf.py build`.
+
+**HiSLIP connection refused** — Check serial monitor for the device IP. Test TCP: `nc -zv <ip> 4880`.
 
 ## References
 
-- [HiSLIP Specification (IVI-6.1)](https://www.ivifoundation.org/downloads/Protocol%20Specifications/IVI-6.1_HiSLIP-1.1-2011-02-24.pdf)
-- [SCPI Standard (IEEE 488.2)](https://www.ivifoundation.org/docs/scpi-99.pdf)
+- [HiSLIP Specification IVI-6.1](https://www.ivifoundation.org/downloads/Protocol%20Specifications/IVI-6.1_HiSLIP-1.1-2011-02-24.pdf)
+- [SCPI Standard IEEE 488.2](https://www.ivifoundation.org/docs/scpi-99.pdf)
 - [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/)
-- [ESP32-WROOM-32 Datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32_datasheet_en.pdf)
-
-# Build sample application on the side
-- import sdk
-- timer + stopwatch
-- visa commands to stopwatch, start stop lap
-- firmware booted on side, expose method for controlling pins

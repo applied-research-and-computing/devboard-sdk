@@ -1,0 +1,26 @@
+idf_component_register(
+    SRCS
+        "carbon_instrument.c"
+        "carbon_registry.c"
+        "hislip.c"
+        "hislip_server.c"
+        "scpi_parser.c"
+        "scpi_standard.c"
+        "scpi_gpio.c"
+        "scpi_adc.c"
+        "scpi_uart.c"
+        "mdns_service.c"
+        "mdns_debug.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "."
+    PRIV_REQUIRES
+        esp_adc
+        esp_driver_gpio
+        esp_driver_uart
+        esp_netif
+        esp_wifi
+        lwip
+        mdns
+)
