@@ -36,6 +36,7 @@ static const char *TAG = "hislip_server";
 #define HISLIP_TASK_PRIORITY          (tskIDLE_PRIORITY + 5)
 #define SCPI_RESPONSE_BUF_SIZE        8192
 #define SOCKET_TIMEOUT_SEC            10
+#define DEVICE_CLEAR_BIT              (1UL << 2)
 #define PROC_DONE_BIT                 (1UL << 3)
 
 typedef struct {
@@ -175,6 +176,15 @@ static void command_processor_task(void *arg)
         int response_len = scpi_parse_command(pending.cmd, response, SCPI_RESPONSE_BUF_SIZE);
         free(pending.cmd);
 
+        if (s_session.device_clear_pending) {
+            hislip_pending_cmd_t drain;
+            while (xQueueReceive(s_session.cmd_queue, &drain, 0) == pdTRUE) {
+                free(drain.cmd);
+            }
+            xTaskNotifyStateClear(NULL);  // discard stale DEVICE_CLEAR_BIT
+            continue;                     // sync_loop handles *CLS via DEVICE_CLEAR_ACK
+        }
+
         if (response_len < 0) {
             snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
             response_len = strlen(response);
@@ -269,29 +279,34 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                 ESP_LOGI(TAG, "SCPI command: %s", (char *)command);
                 int response_len = scpi_parse_command((const char *)command, response,
                                                       SCPI_RESPONSE_BUF_SIZE);
-                if (response_len < 0) {
-                    snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
-                    response_len = strlen(response);
-                }
 
-                if (response_len > 0) {
-                    if (hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param,
-                                            (const uint8_t *)response,
-                                            (uint64_t)response_len) < 0) {
-                        break;
+                if (!s_session.device_clear_pending) {
+                    if (response_len < 0) {
+                        snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
+                        response_len = strlen(response);
                     }
-                    session_lock();
-                    s_session.status_byte |= 0x10;  // set MAV
-                    session_unlock();
+
+                    if (response_len > 0) {
+                        if (hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param,
+                                                (const uint8_t *)response,
+                                                (uint64_t)response_len) < 0) {
+                            break;
+                        }
+                        session_lock();
+                        s_session.status_byte |= 0x10;  // set MAV
+                        session_unlock();
+                    }
                 }
             }
             command_len = 0;
         } else if (msg_type == HISLIP_MSG_TRIGGER) {
             ESP_LOGI(TAG, "Trigger received");
-        } else if (msg_type == HISLIP_MSG_DEVICE_CLEAR_COMPLETE) {
+        } else if (msg_type == HISLIP_MSG_DEVICE_CLEAR_ACK) {
+            xTaskNotifyStateClear(NULL);  // discard any stale DEVICE_CLEAR_BIT
             command_len = 0;
             scpi_parse_command("*CLS", response, SCPI_RESPONSE_BUF_SIZE);
-            hislip_send_message(sock, HISLIP_MSG_DEVICE_CLEAR_ACK, 0, 0, NULL, 0);
+            s_session.device_clear_pending = false;
+            xSemaphoreGive(s_session.clear_done);
         } else {
             ESP_LOGW(TAG, "Unhandled sync message type: %u", msg_type);
             send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
@@ -385,9 +400,29 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 break;
             }
 
-            case HISLIP_MSG_ASYNC_DEVICE_CLEAR:
+            case HISLIP_MSG_ASYNC_DEVICE_CLEAR: {
+                s_session.device_clear_pending = true;
+
+                TaskHandle_t target = s_session.overlap_mode
+                                      ? s_session.proc_task
+                                      : s_session.sync_task;
+                if (target != NULL) {
+                    xTaskNotify(target, DEVICE_CLEAR_BIT, eSetBits);
+                }
+
+                if (s_session.sync_sock >= 0) {
+                    hislip_send_message(s_session.sync_sock,
+                                        HISLIP_MSG_DEVICE_CLEAR_COMPLETE, 0, 0, NULL, 0);
+                }
+
+                if (xSemaphoreTake(s_session.clear_done, pdMS_TO_TICKS(5000)) != pdTRUE) {
+                    ESP_LOGW(TAG, "Device clear timed out");
+                    s_session.device_clear_pending = false;
+                }
+
                 hislip_send_message(sock, HISLIP_MSG_ASYNC_DEV_CLEAR_ACK, 0, 0, NULL, 0);
                 break;
+            }
 
             case HISLIP_MSG_ASYNC_REMOTE_LOCAL_CTRL: {
                 session_lock();
