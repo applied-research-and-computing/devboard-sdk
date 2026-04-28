@@ -79,7 +79,7 @@ int carbon_parse_params(const char *cmd_tail,
                 token[sizeof(token) - 1] = '\0';
             } else {
                 snprintf(response_buf, response_max,
-                         "ERROR: Missing required parameter '%s'", d->name);
+                         "ERR:1:missing required parameter '%s'", d->name);
                 return -1;
             }
         }
@@ -93,13 +93,13 @@ int carbon_parse_params(const char *cmd_tail,
                 long v = strtol(token, &end, 10);
                 if (end == token || *end != '\0') {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': expected integer, got '%s'",
+                             "ERR:2:parameter '%s': expected integer, got '%s'",
                              d->name, token);
                     return -1;
                 }
                 if (d->max > d->min && ((double)v < d->min || (double)v > d->max)) {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': %ld out of range [%.0f, %.0f]",
+                             "ERR:3:parameter '%s': %ld out of range [%.0f, %.0f]",
                              d->name, v, d->min, d->max);
                     return -1;
                 }
@@ -111,13 +111,13 @@ int carbon_parse_params(const char *cmd_tail,
                 float v = strtof(token, &end);
                 if (end == token || *end != '\0') {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': expected float, got '%s'",
+                             "ERR:2:parameter '%s': expected float, got '%s'",
                              d->name, token);
                     return -1;
                 }
                 if (d->max > d->min && ((double)v < d->min || (double)v > d->max)) {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': %g out of range [%g, %g]",
+                             "ERR:3:parameter '%s': %g out of range [%g, %g]",
                              d->name, (double)v, d->min, d->max);
                     return -1;
                 }
@@ -134,7 +134,7 @@ int carbon_parse_params(const char *cmd_tail,
                     bv = false;
                 } else {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': expected boolean (0/1/true/false/on/off),"
+                             "ERR:2:parameter '%s': expected boolean (0/1/true/false/on/off),"
                              " got '%s'", d->name, token);
                     return -1;
                 }
@@ -145,7 +145,7 @@ int carbon_parse_params(const char *cmd_tail,
                 size_t len = strlen(token) + 1;
                 if (scratch_used + len > scratch_len) {
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': string too long", d->name);
+                             "ERR:2:parameter '%s': string too long", d->name);
                     return -1;
                 }
                 memcpy(str_scratch + scratch_used, token, len);
@@ -170,7 +170,7 @@ int carbon_parse_params(const char *cmd_tail,
                         strncat(valid, d->enum_values[j], sizeof(valid) - strlen(valid) - 1);
                     }
                     snprintf(response_buf, response_max,
-                             "ERROR: Parameter '%s': expected %s, got '%s'",
+                             "ERR:2:parameter '%s': expected %s, got '%s'",
                              d->name, valid, token);
                     return -1;
                 }

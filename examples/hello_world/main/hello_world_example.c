@@ -17,6 +17,7 @@
 #include "esp_event.h"
 
 #include "carbon_instrument.h"
+#include "carbon_response.h"
 
 static const char *TAG = "hello_world";
 
@@ -47,9 +48,9 @@ static int cmd_greet_name(const char *cmd, char *r, size_t n)
 
 static int cmd_counter(const char *cmd, char *r, size_t n)
 {
-    static uint32_t count = 0;
+    static int64_t count = 0;
     count++;
-    return snprintf(r, n, "%lu", (unsigned long)count);
+    return carbon_respond_int(r, n, count);
 }
 
 // cmd arrives as: ECHO "your message"

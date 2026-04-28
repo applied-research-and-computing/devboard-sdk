@@ -1,4 +1,5 @@
 #include "carbon_instrument.h"
+#include "carbon_response.h"
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -27,26 +28,22 @@ static int gpio_set_handler_v2(const carbon_parsed_param_t *params, int param_co
     int value = params[1].int_val;
     /* Range (2-33) already validated by the SDK; check for safe writable pins. */
     if (!is_valid_pin(pin)) {
-        snprintf(r, n, "ERROR: Invalid pin %d", pin);
-        return strlen(r);
+        return carbon_respond_error(r, n, 2, "invalid pin");
     }
     gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_level(pin, value);
     ESP_LOGI(TAG, "GPIO%d = %d", pin, value);
-    snprintf(r, n, "OK");
-    return strlen(r);
+    return carbon_respond_enum(r, n, "OK");
 }
 
 static int gpio_get_handler(const char *cmd, char *r, size_t n)
 {
     int pin;
     if (sscanf(cmd + 10, "%d", &pin) != 1) {
-        snprintf(r, n, "ERROR: Invalid GPIO:GET? syntax");
-        return strlen(r);
+        return carbon_respond_error(r, n, 2, "invalid GPIO:GET? syntax");
     }
-    if (!is_valid_pin(pin)) { snprintf(r, n, "ERROR: Invalid pin %d", pin); return strlen(r); }
-    snprintf(r, n, "%d", gpio_get_level(pin));
-    return strlen(r);
+    if (!is_valid_pin(pin)) { return carbon_respond_error(r, n, 2, "invalid pin"); }
+    return carbon_respond_int(r, n, gpio_get_level(pin));
 }
 
 static int gpio_config_handler(const char *cmd, char *r, size_t n)
@@ -54,18 +51,16 @@ static int gpio_config_handler(const char *cmd, char *r, size_t n)
     int pin;
     char mode_str[16];
     if (sscanf(cmd + 12, "%d %15s", &pin, mode_str) != 2) {
-        snprintf(r, n, "ERROR: Invalid GPIO:CONFIG syntax");
-        return strlen(r);
+        return carbon_respond_error(r, n, 2, "invalid GPIO:CONFIG syntax");
     }
-    if (!is_valid_pin(pin)) { snprintf(r, n, "ERROR: Invalid pin %d", pin); return strlen(r); }
+    if (!is_valid_pin(pin)) { return carbon_respond_error(r, n, 2, "invalid pin"); }
     gpio_mode_t mode;
     if (strcasecmp(mode_str, "INPUT") == 0)       mode = GPIO_MODE_INPUT;
     else if (strcasecmp(mode_str, "OUTPUT") == 0) mode = GPIO_MODE_INPUT_OUTPUT;
-    else { snprintf(r, n, "ERROR: Mode must be INPUT or OUTPUT"); return strlen(r); }
+    else { return carbon_respond_error(r, n, 2, "mode must be INPUT or OUTPUT"); }
     gpio_set_direction(pin, mode);
     ESP_LOGI(TAG, "GPIO%d configured as %s", pin, mode_str);
-    snprintf(r, n, "OK");
-    return strlen(r);
+    return carbon_respond_enum(r, n, "OK");
 }
 
 void scpi_gpio_init(void)
