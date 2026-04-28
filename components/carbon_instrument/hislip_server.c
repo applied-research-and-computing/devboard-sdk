@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
@@ -23,51 +24,65 @@ static const char *TAG = "hislip_server";
 #define HISLIP_SYNC_PORT CONFIG_HISLIP_SYNC_PORT
 #endif
 
-#define HISLIP_LISTEN_BACKLOG 2
+#define HISLIP_LISTEN_BACKLOG         2
 #define HISLIP_ACCEPT_TASK_STACK_SIZE 4096
 #define HISLIP_CLIENT_TASK_STACK_SIZE 6144
-#define HISLIP_TASK_PRIORITY (tskIDLE_PRIORITY + 5)
-#define SCPI_RESPONSE_BUF_SIZE 8192
-#define SOCKET_TIMEOUT_SEC 10
+#define HISLIP_TASK_PRIORITY          (tskIDLE_PRIORITY + 5)
+#define SCPI_RESPONSE_BUF_SIZE        8192
+#define SOCKET_TIMEOUT_SEC            10
 
 typedef struct {
-    uint16_t session_id;
-    bool sync_open;
-    bool async_open;
-    bool mav;
-    SemaphoreHandle_t lock;
-} hislip_server_state_t;
+    uint16_t          session_id;
+    int               async_sock;         // -1 until async channel connects
+    TaskHandle_t      sync_task;
+    TaskHandle_t      async_task;
+    bool              sync_open;
+    bool              async_open;
+    SemaphoreHandle_t lock;               // protects status_byte, async_sock, open flags
+    SemaphoreHandle_t async_send_lock;    // serialises writes to async_sock
+    SemaphoreHandle_t clear_done;         // sync signals async after completing device clear
+    uint8_t           status_byte;        // IEEE 488.2 status byte (MAV = bit 4)
+    bool              remote_mode;
+    bool              overlap_mode;
+    volatile bool     device_clear_pending;
+    QueueHandle_t     cmd_queue;          // overlap mode command queue (NULL until step 2)
+} hislip_session_t;
 
-static hislip_server_state_t s_state = {
-    .session_id = 1,
-    .sync_open = false,
-    .async_open = false,
-    .mav = false,
-    .lock = NULL,
+static hislip_session_t s_session = {
+    .session_id           = 1,
+    .async_sock           = -1,
+    .sync_task            = NULL,
+    .async_task           = NULL,
+    .sync_open            = false,
+    .async_open           = false,
+    .lock                 = NULL,
+    .async_send_lock      = NULL,
+    .clear_done           = NULL,
+    .status_byte          = 0,
+    .remote_mode          = false,
+    .overlap_mode         = false,
+    .device_clear_pending = false,
+    .cmd_queue            = NULL,
 };
 
 static void set_socket_timeouts(int sock)
 {
     struct timeval timeout = {
-        .tv_sec = SOCKET_TIMEOUT_SEC,
+        .tv_sec  = SOCKET_TIMEOUT_SEC,
         .tv_usec = 0,
     };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 }
 
-static void lock_state(void)
+static void session_lock(void)
 {
-    if (s_state.lock != NULL) {
-        xSemaphoreTake(s_state.lock, portMAX_DELAY);
-    }
+    xSemaphoreTake(s_session.lock, portMAX_DELAY);
 }
 
-static void unlock_state(void)
+static void session_unlock(void)
 {
-    if (s_state.lock != NULL) {
-        xSemaphoreGive(s_state.lock);
-    }
+    xSemaphoreGive(s_session.lock);
 }
 
 static int send_error(int sock, uint8_t code)
@@ -81,11 +96,11 @@ static int handle_initialize(int sock, uint32_t msg_param, const uint8_t *payloa
     uint16_t negotiated = client_version == 0 || client_version > 0x0100 ? 0x0100 : client_version;
     uint16_t session_id;
 
-    lock_state();
-    session_id = s_state.session_id;
-    s_state.sync_open = true;
-    s_state.mav = false;
-    unlock_state();
+    session_lock();
+    session_id            = s_session.session_id;
+    s_session.sync_open   = true;
+    s_session.status_byte = 0;
+    session_unlock();
 
     if (payload_len > 0) {
         ESP_LOGI(TAG, "HiSLIP sub-address: %.*s", (int)payload_len, (const char *)payload);
@@ -111,22 +126,25 @@ static int append_payload(uint8_t *buffer, size_t *buffer_len, const uint8_t *pa
 
 static void sync_loop(int sock, uint8_t *rx_buffer)
 {
-    uint8_t *command = calloc(1, HISLIP_MAX_PAYLOAD_SIZE + 1);
-    char *response = calloc(1, SCPI_RESPONSE_BUF_SIZE);
-    size_t command_len = 0;
+    s_session.sync_task = xTaskGetCurrentTaskHandle();
+
+    uint8_t *command     = calloc(1, HISLIP_MAX_PAYLOAD_SIZE + 1);
+    char    *response    = calloc(1, SCPI_RESPONSE_BUF_SIZE);
+    size_t   command_len = 0;
 
     if (command == NULL || response == NULL) {
         ESP_LOGE(TAG, "Failed to allocate sync buffers");
         free(command);
         free(response);
+        s_session.sync_task = NULL;
         return;
     }
 
     while (1) {
-        uint8_t msg_type;
-        uint8_t control_code;
+        uint8_t  msg_type;
+        uint8_t  control_code;
         uint32_t msg_param;
-        size_t payload_len;
+        size_t   payload_len;
 
         if (hislip_recv_message(sock, &msg_type, &control_code, &msg_param,
                                 rx_buffer, HISLIP_MAX_PAYLOAD_SIZE, &payload_len) < 0) {
@@ -162,9 +180,9 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                     break;
                 }
 
-                lock_state();
-                s_state.mav = true;
-                unlock_state();
+                session_lock();
+                s_session.status_byte |= 0x10;  // set MAV
+                session_unlock();
             }
         } else if (msg_type == HISLIP_MSG_TRIGGER) {
             ESP_LOGI(TAG, "Trigger received");
@@ -180,6 +198,7 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
 
     free(command);
     free(response);
+    s_session.sync_task = NULL;
 }
 
 static int handle_async_initialize(int sock, uint32_t msg_param)
@@ -187,12 +206,14 @@ static int handle_async_initialize(int sock, uint32_t msg_param)
     uint16_t requested_session = (uint16_t)(msg_param & 0xFFFF);
     bool valid;
 
-    lock_state();
-    valid = s_state.sync_open && requested_session == s_state.session_id;
+    session_lock();
+    valid = s_session.sync_open && !s_session.async_open
+            && requested_session == s_session.session_id;
     if (valid) {
-        s_state.async_open = true;
+        s_session.async_open = true;
+        s_session.async_sock = sock;
     }
-    unlock_state();
+    session_unlock();
 
     if (!valid) {
         ESP_LOGE(TAG, "Invalid async initialize for session %u", requested_session);
@@ -205,11 +226,13 @@ static int handle_async_initialize(int sock, uint32_t msg_param)
 
 static void async_loop(int sock, uint8_t *rx_buffer)
 {
+    s_session.async_task = xTaskGetCurrentTaskHandle();
+
     while (1) {
-        uint8_t msg_type;
-        uint8_t control_code;
+        uint8_t  msg_type;
+        uint8_t  control_code;
         uint32_t msg_param;
-        size_t payload_len;
+        size_t   payload_len;
 
         if (hislip_recv_message(sock, &msg_type, &control_code, &msg_param,
                                 rx_buffer, HISLIP_MAX_PAYLOAD_SIZE, &payload_len) < 0) {
@@ -224,8 +247,7 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                     memcpy(&encoded, rx_buffer, sizeof(encoded));
                     proposed = hislip_ntohll(encoded);
                 }
-
-                uint64_t negotiated = proposed < HISLIP_MAX_PAYLOAD_SIZE ? proposed : HISLIP_MAX_PAYLOAD_SIZE;
+                uint64_t negotiated       = proposed < HISLIP_MAX_PAYLOAD_SIZE ? proposed : HISLIP_MAX_PAYLOAD_SIZE;
                 uint64_t encoded_response = hislip_htonll(negotiated);
                 hislip_send_message(sock, HISLIP_MSG_ASYNC_MAX_MSG_SIZE_RESP, 0, 0,
                                     (const uint8_t *)&encoded_response, sizeof(encoded_response));
@@ -237,15 +259,14 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 break;
 
             case HISLIP_MSG_ASYNC_STATUS_QUERY: {
-                bool mav;
-                lock_state();
-                mav = s_state.mav;
+                uint8_t stb;
+                session_lock();
+                stb = s_session.status_byte;
                 if (control_code & 1) {
-                    s_state.mav = false;
+                    s_session.status_byte &= ~0x10;  // clear MAV
                 }
-                unlock_state();
-
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_STATUS_RESPONSE, mav ? 0x10 : 0, 0, NULL, 0);
+                session_unlock();
+                hislip_send_message(sock, HISLIP_MSG_ASYNC_STATUS_RESPONSE, stb, 0, NULL, 0);
                 break;
             }
 
@@ -253,9 +274,14 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 hislip_send_message(sock, HISLIP_MSG_ASYNC_DEV_CLEAR_ACK, 0, 0, NULL, 0);
                 break;
 
-            case HISLIP_MSG_ASYNC_REMOTE_LOCAL_CTRL:
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_REMOTE_LOCAL_RESP, 0, 0, NULL, 0);
+            case HISLIP_MSG_ASYNC_REMOTE_LOCAL_CTRL: {
+                session_lock();
+                s_session.remote_mode = (control_code > 0);
+                session_unlock();
+                ESP_LOGI(TAG, "Remote mode: %s", control_code > 0 ? "enabled" : "disabled");
+                hislip_send_message(sock, HISLIP_MSG_ASYNC_REMOTE_LOCAL_RESP, control_code, 0, NULL, 0);
                 break;
+            }
 
             default:
                 ESP_LOGW(TAG, "Unhandled async message type: %u", msg_type);
@@ -263,11 +289,19 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 break;
         }
     }
+
+    session_lock();
+    s_session.async_sock = -1;
+    s_session.async_open = false;
+    session_unlock();
+    s_session.async_task = NULL;
+
+    ESP_LOGI(TAG, "Async channel closed for session %u", s_session.session_id);
 }
 
 static void client_task(void *arg)
 {
-    int sock = (int)(intptr_t)arg;
+    int      sock      = (int)(intptr_t)arg;
     uint8_t *rx_buffer = malloc(HISLIP_MAX_PAYLOAD_SIZE);
 
     if (rx_buffer == NULL) {
@@ -279,10 +313,10 @@ static void client_task(void *arg)
 
     set_socket_timeouts(sock);
 
-    uint8_t msg_type;
-    uint8_t control_code;
+    uint8_t  msg_type;
+    uint8_t  control_code;
     uint32_t msg_param;
-    size_t payload_len;
+    size_t   payload_len;
 
     if (hislip_recv_message(sock, &msg_type, &control_code, &msg_param,
                             rx_buffer, HISLIP_MAX_PAYLOAD_SIZE, &payload_len) == 0) {
@@ -290,18 +324,16 @@ static void client_task(void *arg)
             if (handle_initialize(sock, msg_param, rx_buffer, payload_len) == 0) {
                 sync_loop(sock, rx_buffer);
             }
-            lock_state();
-            s_state.sync_open = false;
-            s_state.async_open = false;
-            s_state.mav = false;
-            unlock_state();
+            session_lock();
+            s_session.sync_open   = false;
+            s_session.status_byte = 0;
+            uint16_t next         = s_session.session_id + 1;
+            s_session.session_id  = (next == 0) ? 1 : next;
+            session_unlock();
         } else if (msg_type == HISLIP_MSG_ASYNC_INITIALIZE) {
             if (handle_async_initialize(sock, msg_param) == 0) {
                 async_loop(sock, rx_buffer);
             }
-            lock_state();
-            s_state.async_open = false;
-            unlock_state();
         } else {
             ESP_LOGW(TAG, "Unexpected first HiSLIP message type: %u", msg_type);
             send_error(sock, HISLIP_ERROR_INVALID_INIT_SEQ);
@@ -326,9 +358,9 @@ static void accept_task(void *arg)
     setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in server_addr = {
-        .sin_family = AF_INET,
+        .sin_family      = AF_INET,
         .sin_addr.s_addr = htonl(INADDR_ANY),
-        .sin_port = htons(HISLIP_SYNC_PORT),
+        .sin_port        = htons(HISLIP_SYNC_PORT),
     };
 
     if (bind(listen_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -349,7 +381,7 @@ static void accept_task(void *arg)
 
     while (1) {
         struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
+        socklen_t          client_len = sizeof(client_addr);
         int client_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &client_len);
         if (client_sock < 0) {
             ESP_LOGE(TAG, "accept() failed: errno %d", errno);
@@ -371,10 +403,26 @@ static void accept_task(void *arg)
 
 void hislip_server_start(void)
 {
-    if (s_state.lock == NULL) {
-        s_state.lock = xSemaphoreCreateMutex();
-        if (s_state.lock == NULL) {
+    if (s_session.lock == NULL) {
+        s_session.lock = xSemaphoreCreateMutex();
+        if (s_session.lock == NULL) {
             ESP_LOGE(TAG, "Failed to create session mutex");
+            return;
+        }
+    }
+
+    if (s_session.async_send_lock == NULL) {
+        s_session.async_send_lock = xSemaphoreCreateMutex();
+        if (s_session.async_send_lock == NULL) {
+            ESP_LOGE(TAG, "Failed to create async send mutex");
+            return;
+        }
+    }
+
+    if (s_session.clear_done == NULL) {
+        s_session.clear_done = xSemaphoreCreateBinary();
+        if (s_session.clear_done == NULL) {
+            ESP_LOGE(TAG, "Failed to create clear semaphore");
             return;
         }
     }
