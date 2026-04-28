@@ -584,8 +584,12 @@ static void accept_task(void *arg)
     }
 }
 
+extern void scpi_standard_set_status_source(uint8_t *ptr);
+
 void hislip_server_start(void)
 {
+    scpi_standard_set_status_source(&s_session.status_byte);
+
     if (s_session.lock == NULL) {
         s_session.lock = xSemaphoreCreateMutex();
         if (s_session.lock == NULL) {
