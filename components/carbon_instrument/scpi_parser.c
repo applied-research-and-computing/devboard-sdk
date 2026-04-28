@@ -1,4 +1,5 @@
 #include "scpi_parser.h"
+#include "scpi_watchdog.h"
 #include "carbon_registry.h"
 #include <string.h>
 #include <stdio.h>
@@ -49,7 +50,7 @@ int scpi_parse_command(const char *cmd_str, char *response_buf, size_t response_
         if (strcmp(cmd, desc->scpi_command) == 0 ||
             (strncmp(cmd, desc->scpi_command, scpi_len) == 0 && cmd[scpi_len] == ' '))
         {
-            return desc->handler(cmd, response_buf, response_max_len);
+            return scpi_watchdog_dispatch(desc, cmd, response_buf, response_max_len);
         }
     }
 

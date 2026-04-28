@@ -4,6 +4,7 @@ set(SRCS
     "hislip.c"
     "hislip_server.c"
     "scpi_parser.c"
+    "scpi_watchdog.c"
     "scpi_standard.c"
     "scpi_system.c"
     "mdns_service.c"
