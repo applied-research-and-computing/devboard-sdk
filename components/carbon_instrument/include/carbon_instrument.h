@@ -66,6 +66,11 @@ const carbon_instrument_config_t *carbon_instrument_get_config(void);
 // desc must point to storage that outlives the call (use static const).
 esp_err_t carbon_register_command(const carbon_cmd_descriptor_t *desc);
 
+// Register a callback invoked when the client sends an IEEE 488.1 GET
+// (Group Execute Trigger) via the HiSLIP TRIGGER message.
+// Pass NULL to clear a previously registered callback.
+void carbon_register_trigger(void (*callback)(void));
+
 // Register built-in commands and start the HiSLIP server.
 // Call after registering any custom commands.
 void carbon_instrument_start(void);

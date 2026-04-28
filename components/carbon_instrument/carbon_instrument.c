@@ -16,6 +16,20 @@ static const char *TAG = "carbon_instrument";
 #define DEFAULT_SERIAL CONFIG_DEVICE_SERIAL
 #endif
 
+static void (*s_trigger_cb)(void) = NULL;
+
+void carbon_register_trigger(void (*callback)(void))
+{
+    s_trigger_cb = callback;
+}
+
+void carbon_fire_trigger(void)
+{
+    if (s_trigger_cb != NULL) {
+        s_trigger_cb();
+    }
+}
+
 static carbon_instrument_config_t s_config = {
     .manufacturer     = "CARBON",
     .model            = "ESP32-INSTRUMENT",

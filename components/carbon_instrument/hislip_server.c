@@ -60,8 +60,9 @@ typedef struct {
 
 typedef struct {
     uint32_t message_id;
-    char    *cmd;   // heap-allocated; NULL is a shutdown sentinel
+    char    *cmd;        // heap-allocated; NULL + !is_trigger = shutdown sentinel
     size_t   len;
+    bool     is_trigger; // true for TRIGGER messages; cmd is unused
 } hislip_pending_cmd_t;
 
 static hislip_session_t s_session = {
@@ -178,6 +179,8 @@ static int append_payload(uint8_t *buffer, size_t *buffer_len, const uint8_t *pa
     return 0;
 }
 
+extern void carbon_fire_trigger(void);
+
 static void command_processor_task(void *arg)
 {
     char *response = malloc(SCPI_RESPONSE_BUF_SIZE);
@@ -190,10 +193,22 @@ static void command_processor_task(void *arg)
 
     hislip_pending_cmd_t pending;
     while (xQueueReceive(s_session.cmd_queue, &pending, portMAX_DELAY) == pdTRUE) {
-        if (pending.cmd == NULL) {
+        // Shutdown sentinel: cmd=NULL, is_trigger=false
+        if (!pending.is_trigger && pending.cmd == NULL) {
             break;
         }
 
+        // TRIGGER message: fire callback and ack; skip if device clear is in progress
+        if (pending.is_trigger) {
+            if (!s_session.device_clear_pending) {
+                carbon_fire_trigger();
+                hislip_send_message(s_session.sync_sock, HISLIP_MSG_DATA_END, 0,
+                                    pending.message_id, NULL, 0);
+            }
+            continue;
+        }
+
+        // Normal SCPI command
         ESP_LOGI(TAG, "SCPI command (overlap): %s", pending.cmd);
         int response_len = scpi_parse_command(pending.cmd, response, SCPI_RESPONSE_BUF_SIZE);
         free(pending.cmd);
@@ -201,7 +216,7 @@ static void command_processor_task(void *arg)
         if (s_session.device_clear_pending) {
             hislip_pending_cmd_t drain;
             while (xQueueReceive(s_session.cmd_queue, &drain, 0) == pdTRUE) {
-                free(drain.cmd);
+                free(drain.cmd);  // free(NULL) is safe for trigger items
             }
             xTaskNotifyStateClear(NULL);  // discard stale DEVICE_CLEAR_BIT
             continue;                     // sync_loop handles *CLS via DEVICE_CLEAR_ACK
@@ -328,7 +343,18 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
             }
             command_len = 0;
         } else if (msg_type == HISLIP_MSG_TRIGGER) {
-            ESP_LOGI(TAG, "Trigger received");
+            if (s_session.overlap_mode) {
+                hislip_pending_cmd_t trig = {
+                    .message_id = msg_param,
+                    .is_trigger = true,
+                };
+                if (xQueueSend(s_session.cmd_queue, &trig, pdMS_TO_TICKS(1000)) != pdTRUE) {
+                    ESP_LOGW(TAG, "Trigger dropped: command queue full");
+                }
+            } else {
+                carbon_fire_trigger();
+                hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param, NULL, 0);
+            }
         } else if (msg_type == HISLIP_MSG_DEVICE_CLEAR_ACK) {
             xTaskNotifyStateClear(NULL);  // discard any stale DEVICE_CLEAR_BIT
             command_len = 0;
