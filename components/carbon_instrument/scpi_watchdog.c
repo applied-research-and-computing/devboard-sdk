@@ -1,4 +1,5 @@
 #include "scpi_watchdog.h"
+#include "carbon_param_parser.h"
 
 #include "freertos/FreeRTOS.h"
 #if configUSE_TIMERS != 1
@@ -30,10 +31,30 @@ typedef struct {
     TaskHandle_t                   handler_task;
 } watchdog_ctx_t;
 
+/* Dispatch to handler_v2 (with SDK-parsed params) or fall through to handler (raw string). */
+static int invoke_handler(const carbon_cmd_descriptor_t *desc,
+                          const char *cmd,
+                          char *response_buf,
+                          size_t response_max_len)
+{
+    if (desc->handler_v2) {
+        carbon_parsed_param_t parsed[CARBON_MAX_PARAMS];
+        char str_scratch[256];
+        const char *tail = cmd + strlen(desc->scpi_command);
+        while (*tail == ' ' || *tail == '\t') tail++;
+        int n = carbon_parse_params(tail, desc->params, desc->param_count,
+                                    parsed, str_scratch, sizeof(str_scratch),
+                                    response_buf, response_max_len);
+        if (n < 0) return (int)strlen(response_buf);
+        return desc->handler_v2(parsed, n, response_buf, response_max_len);
+    }
+    return desc->handler(cmd, response_buf, response_max_len);
+}
+
 static void handler_task_fn(void *arg)
 {
     watchdog_ctx_t *ctx = arg;
-    ctx->result = ctx->desc->handler(ctx->cmd, ctx->response_buf, ctx->response_max_len);
+    ctx->result = invoke_handler(ctx->desc, ctx->cmd, ctx->response_buf, ctx->response_max_len);
     xTaskNotify(ctx->caller_task, DONE_BIT, eSetBits);
     vTaskSuspend(NULL);
 }
@@ -55,7 +76,7 @@ int scpi_watchdog_dispatch(const carbon_cmd_descriptor_t *desc,
 
     watchdog_ctx_t *ctx = malloc(sizeof(watchdog_ctx_t));
     if (!ctx) {
-        return desc->handler(cmd, response_buf, response_max_len);
+        return invoke_handler(desc, cmd, response_buf, response_max_len);
     }
     ctx->desc            = desc;
     ctx->cmd             = cmd;
@@ -69,7 +90,7 @@ int scpi_watchdog_dispatch(const carbon_cmd_descriptor_t *desc,
                                        pdFALSE, ctx, watchdog_cb);
     if (!timer) {
         free(ctx);
-        return desc->handler(cmd, response_buf, response_max_len);
+        return invoke_handler(desc, cmd, response_buf, response_max_len);
     }
 
     if (xTaskCreate(handler_task_fn, "cmd_handler",
@@ -77,7 +98,7 @@ int scpi_watchdog_dispatch(const carbon_cmd_descriptor_t *desc,
                     ctx, uxTaskPriorityGet(NULL), &ctx->handler_task) != pdPASS) {
         xTimerDelete(timer, 0);
         free(ctx);
-        return desc->handler(cmd, response_buf, response_max_len);
+        return invoke_handler(desc, cmd, response_buf, response_max_len);
     }
 
     xTimerStart(timer, 0);

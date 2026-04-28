@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 #define CARBON_MAX_PARAMS      8
@@ -25,6 +26,26 @@ typedef enum {
 // returns: byte length of response written (0 = no response)
 typedef int (*carbon_cmd_handler_t)(const char *cmd, char *response, size_t response_max);
 
+// Parsed value for a single parameter, populated by the SDK before handler_v2 is called.
+// For CARBON_PARAM_ENUM, int_val holds the matched index into descriptor->enum_values[].
+typedef struct {
+    const char         *name;
+    carbon_param_type_t type;
+    union {
+        int         int_val;
+        float       float_val;
+        bool        bool_val;
+        const char *str_val;
+    };
+} carbon_parsed_param_t;
+
+// params: array of parsed parameters (length == param_count from descriptor)
+// returns: byte length of response written (0 = no response)
+typedef int (*carbon_cmd_handler_v2_t)(const carbon_parsed_param_t *params,
+                                       int param_count,
+                                       char *response,
+                                       size_t response_max);
+
 typedef struct {
     const char         *name;
     carbon_param_type_t type;
@@ -37,14 +58,15 @@ typedef struct {
 } carbon_param_t;
 
 typedef struct {
-    const char           *scpi_command;  // uppercase mnemonic, e.g. "GPIO:SET" or "*IDN?"
-    carbon_cmd_type_t     type;
-    const char           *group;
-    const char           *description;
-    carbon_param_t        params[CARBON_MAX_PARAMS];
-    int                   param_count;
-    int                   timeout_ms;
-    carbon_cmd_handler_t  handler;
+    const char             *scpi_command;  // uppercase mnemonic, e.g. "GPIO:SET" or "*IDN?"
+    carbon_cmd_type_t       type;
+    const char             *group;
+    const char             *description;
+    carbon_param_t          params[CARBON_MAX_PARAMS];
+    int                     param_count;
+    int                     timeout_ms;
+    carbon_cmd_handler_t    handler;    // set this OR handler_v2, not both
+    carbon_cmd_handler_v2_t handler_v2; // SDK parses params before calling; NULL = use handler
 } carbon_cmd_descriptor_t;
 
 // Device identity. Any NULL field falls back to the Kconfig/firmware default.

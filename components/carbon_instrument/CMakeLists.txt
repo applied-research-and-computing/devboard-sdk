@@ -1,6 +1,7 @@
 set(SRCS
     "carbon_instrument.c"
     "carbon_registry.c"
+    "carbon_param_parser.c"
     "hislip.c"
     "hislip_server.c"
     "scpi_parser.c"

@@ -19,15 +19,17 @@ static bool is_valid_pin(int pin)
     }
 }
 
-static int gpio_set_handler(const char *cmd, char *r, size_t n)
+static int gpio_set_handler_v2(const carbon_parsed_param_t *params, int param_count,
+                               char *r, size_t n)
 {
-    int pin, value;
-    if (sscanf(cmd + 9, "%d %d", &pin, &value) != 2) {
-        snprintf(r, n, "ERROR: Invalid GPIO:SET syntax");
+    (void)param_count;
+    int pin   = params[0].int_val;
+    int value = params[1].int_val;
+    /* Range (2-33) already validated by the SDK; check for safe writable pins. */
+    if (!is_valid_pin(pin)) {
+        snprintf(r, n, "ERROR: Invalid pin %d", pin);
         return strlen(r);
     }
-    if (!is_valid_pin(pin)) { snprintf(r, n, "ERROR: Invalid pin %d", pin); return strlen(r); }
-    if (value != 0 && value != 1) { snprintf(r, n, "ERROR: Value must be 0 or 1"); return strlen(r); }
     gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_level(pin, value);
     ESP_LOGI(TAG, "GPIO%d = %d", pin, value);
@@ -82,7 +84,7 @@ void scpi_gpio_init(void)
             },
             .param_count  = 2,
             .timeout_ms   = 100,
-            .handler      = gpio_set_handler,
+            .handler_v2   = gpio_set_handler_v2,
         },
         {
             .scpi_command = "GPIO:GET?",
