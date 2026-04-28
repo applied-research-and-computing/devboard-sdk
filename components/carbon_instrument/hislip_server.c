@@ -109,6 +109,13 @@ static int send_error(int sock, uint8_t code)
     return hislip_send_message(sock, HISLIP_MSG_ERROR, code, 0, NULL, 0);
 }
 
+// Send a fatal error on sock. Caller must close the socket afterwards.
+static int send_fatal_error(int sock, uint8_t code)
+{
+    ESP_LOGE(TAG, "Fatal HiSLIP error %u on socket %d", code, sock);
+    return hislip_send_message(sock, HISLIP_MSG_FATAL_ERROR, code, 0, NULL, 0);
+}
+
 // Serialised write to the async socket. All tasks sending on async_sock must use
 // this to prevent message interleaving between async_loop responses and SRQ emissions.
 static int async_send(int sock, uint8_t msg_type, uint8_t cc, uint32_t param,
@@ -257,6 +264,7 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
         ESP_LOGE(TAG, "Failed to allocate sync buffers");
         free(command);
         free(response);
+        send_fatal_error(sock, HISLIP_ERROR_UNIDENTIFIED);
         s_session.sync_task = NULL;
         s_session.sync_sock = -1;
         return;
@@ -362,8 +370,20 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
             s_session.device_clear_pending = false;
             xSemaphoreGive(s_session.clear_done);
         } else {
-            ESP_LOGW(TAG, "Unhandled sync message type: %u", msg_type);
-            send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+            bool async_only = msg_type == HISLIP_MSG_ASYNC_LOCK
+                           || msg_type == HISLIP_MSG_ASYNC_LOCK_RESPONSE
+                           || msg_type == HISLIP_MSG_ASYNC_REMOTE_LOCAL_CTRL
+                           || msg_type == HISLIP_MSG_ASYNC_REMOTE_LOCAL_RESP
+                           || msg_type == HISLIP_MSG_ASYNC_MAX_MSG_SIZE
+                           || msg_type == HISLIP_MSG_ASYNC_MAX_MSG_SIZE_RESP
+                           || msg_type >= HISLIP_MSG_ASYNC_INITIALIZE;
+            if (async_only) {
+                ESP_LOGW(TAG, "Async-only message type %u on sync channel", msg_type);
+                send_error(sock, HISLIP_ERROR_ATTEMPT_TO_USE_CONN);
+            } else {
+                ESP_LOGW(TAG, "Unhandled sync message type: %u", msg_type);
+                send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+            }
         }
     }
 
@@ -487,10 +507,22 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 break;
             }
 
-            default:
-                ESP_LOGW(TAG, "Unhandled async message type: %u", msg_type);
-                async_send(sock, HISLIP_MSG_ERROR, HISLIP_ERROR_UNIDENTIFIED, 0, NULL, 0);
+            default: {
+                bool sync_only = msg_type == HISLIP_MSG_DATA
+                              || msg_type == HISLIP_MSG_DATA_END
+                              || msg_type == HISLIP_MSG_DEVICE_CLEAR_COMPLETE
+                              || msg_type == HISLIP_MSG_DEVICE_CLEAR_ACK
+                              || msg_type == HISLIP_MSG_TRIGGER
+                              || msg_type == HISLIP_MSG_INTERRUPTED;
+                if (sync_only) {
+                    ESP_LOGW(TAG, "Sync-only message type %u on async channel", msg_type);
+                    async_send(sock, HISLIP_MSG_ERROR, HISLIP_ERROR_ATTEMPT_TO_USE_CONN, 0, NULL, 0);
+                } else {
+                    ESP_LOGW(TAG, "Unhandled async message type: %u", msg_type);
+                    async_send(sock, HISLIP_MSG_ERROR, HISLIP_ERROR_UNIDENTIFIED, 0, NULL, 0);
+                }
                 break;
+            }
         }
     }
 
