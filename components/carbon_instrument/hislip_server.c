@@ -108,6 +108,28 @@ static int send_error(int sock, uint8_t code)
     return hislip_send_message(sock, HISLIP_MSG_ERROR, code, 0, NULL, 0);
 }
 
+// Serialised write to the async socket. All tasks sending on async_sock must use
+// this to prevent message interleaving between async_loop responses and SRQ emissions.
+static int async_send(int sock, uint8_t msg_type, uint8_t cc, uint32_t param,
+                      const uint8_t *payload, uint64_t len)
+{
+    xSemaphoreTake(s_session.async_send_lock, portMAX_DELAY);
+    int ret = hislip_send_message(sock, msg_type, cc, param, payload, len);
+    xSemaphoreGive(s_session.async_send_lock);
+    return ret;
+}
+
+// Emit ASYNC_SERVICE_REQUEST to notify the client that status has changed.
+// No-op if the async channel is not yet open.
+static void emit_srq(uint8_t stb)
+{
+    session_lock();
+    int sock = s_session.async_sock;
+    session_unlock();
+    if (sock < 0) return;
+    async_send(sock, HISLIP_MSG_ASYNC_SERVICE_REQUEST, stb, 0, NULL, 0);
+}
+
 static int handle_initialize(int sock, uint8_t client_cc, uint32_t msg_param,
                              const uint8_t *payload, size_t payload_len)
 {
@@ -193,9 +215,12 @@ static void command_processor_task(void *arg)
         if (response_len > 0) {
             hislip_send_message(s_session.sync_sock, HISLIP_MSG_DATA_END, 0, pending.message_id,
                                 (const uint8_t *)response, (uint64_t)response_len);
+            uint8_t stb;
             session_lock();
             s_session.status_byte |= 0x10;  // set MAV
+            stb = s_session.status_byte;
             session_unlock();
+            emit_srq(stb);
         }
     }
 
@@ -292,9 +317,12 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                                                 (uint64_t)response_len) < 0) {
                             break;
                         }
+                        uint8_t stb;
                         session_lock();
                         s_session.status_byte |= 0x10;  // set MAV
+                        stb = s_session.status_byte;
                         session_unlock();
+                        emit_srq(stb);
                     }
                 }
             }
@@ -351,7 +379,7 @@ static int handle_async_initialize(int sock, uint32_t msg_param)
     }
 
     ESP_LOGI(TAG, "AsyncInitialize: session=%u", requested_session);
-    return hislip_send_message(sock, HISLIP_MSG_ASYNC_INITIALIZE_RESP, 0, 0x00004342, NULL, 0);
+    return async_send(sock, HISLIP_MSG_ASYNC_INITIALIZE_RESP, 0, 0x00004342, NULL, 0);
 }
 
 static void async_loop(int sock, uint8_t *rx_buffer)
@@ -379,13 +407,13 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 }
                 uint64_t negotiated       = proposed < HISLIP_MAX_PAYLOAD_SIZE ? proposed : HISLIP_MAX_PAYLOAD_SIZE;
                 uint64_t encoded_response = hislip_htonll(negotiated);
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_MAX_MSG_SIZE_RESP, 0, 0,
-                                    (const uint8_t *)&encoded_response, sizeof(encoded_response));
+                async_send(sock, HISLIP_MSG_ASYNC_MAX_MSG_SIZE_RESP, 0, 0,
+                           (const uint8_t *)&encoded_response, sizeof(encoded_response));
                 break;
             }
 
             case HISLIP_MSG_ASYNC_LOCK:
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_LOCK_RESPONSE, 1, 0, NULL, 0);
+                async_send(sock, HISLIP_MSG_ASYNC_LOCK_RESPONSE, 1, 0, NULL, 0);
                 break;
 
             case HISLIP_MSG_ASYNC_STATUS_QUERY: {
@@ -396,7 +424,7 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                     s_session.status_byte &= ~0x10;  // clear MAV
                 }
                 session_unlock();
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_STATUS_RESPONSE, stb, 0, NULL, 0);
+                async_send(sock, HISLIP_MSG_ASYNC_STATUS_RESPONSE, stb, 0, NULL, 0);
                 break;
             }
 
@@ -420,7 +448,7 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                     s_session.device_clear_pending = false;
                 }
 
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_DEV_CLEAR_ACK, 0, 0, NULL, 0);
+                async_send(sock, HISLIP_MSG_ASYNC_DEV_CLEAR_ACK, 0, 0, NULL, 0);
                 break;
             }
 
@@ -429,13 +457,13 @@ static void async_loop(int sock, uint8_t *rx_buffer)
                 s_session.remote_mode = (control_code > 0);
                 session_unlock();
                 ESP_LOGI(TAG, "Remote mode: %s", control_code > 0 ? "enabled" : "disabled");
-                hislip_send_message(sock, HISLIP_MSG_ASYNC_REMOTE_LOCAL_RESP, control_code, 0, NULL, 0);
+                async_send(sock, HISLIP_MSG_ASYNC_REMOTE_LOCAL_RESP, control_code, 0, NULL, 0);
                 break;
             }
 
             default:
                 ESP_LOGW(TAG, "Unhandled async message type: %u", msg_type);
-                send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+                async_send(sock, HISLIP_MSG_ERROR, HISLIP_ERROR_UNIDENTIFIED, 0, NULL, 0);
                 break;
         }
     }
