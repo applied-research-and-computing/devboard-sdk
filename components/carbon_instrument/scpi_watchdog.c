@@ -1,5 +1,6 @@
 #include "scpi_watchdog.h"
 #include "carbon_param_parser.h"
+#include "carbon_response.h"
 
 #include "freertos/FreeRTOS.h"
 #if configUSE_TIMERS != 1
@@ -121,8 +122,7 @@ int scpi_watchdog_dispatch(const carbon_cmd_descriptor_t *desc,
     } else {
         ESP_LOGW(TAG, "Command '%s' timed out after %d ms",
                  desc->scpi_command, timeout_ms);
-        ret = snprintf(response_buf, response_max_len, "-365,\"Time out error\"");
-        if (ret < 0) ret = 0;
+        ret = carbon_respond_error(response_buf, response_max_len, -365, "Time out error");
     }
 
     free(ctx);

@@ -1,4 +1,5 @@
 #include "carbon_instrument.h"
+#include "carbon_response.h"
 #include <string.h>
 #include <stdio.h>
 #include "esp_adc/adc_oneshot.h"
@@ -16,18 +17,15 @@ static bool adc_initialized = false;
 static int adc_read_handler(const char *cmd, char *r, size_t n)
 {
     if (!adc_initialized || adc1_handle == NULL || adc1_cali_handle == NULL) {
-        snprintf(r, n, "ERROR: ADC not initialized");
-        return strlen(r);
+        return carbon_respond_error(r, n, 1, "ADC not initialized");
     }
 
     int channel;
     if (sscanf(cmd + 10, "%d", &channel) != 1) {
-        snprintf(r, n, "ERROR: Invalid ADC:READ? syntax");
-        return strlen(r);
+        return carbon_respond_error(r, n, 2, "invalid ADC:READ? syntax");
     }
     if (channel < 0 || channel > 7) {
-        snprintf(r, n, "ERROR: Channel must be 0-7");
-        return strlen(r);
+        return carbon_respond_error(r, n, 2, "channel must be 0-7");
     }
 
     adc_channel_t adc_channel;
@@ -40,7 +38,7 @@ static int adc_read_handler(const char *cmd, char *r, size_t n)
         case 5: adc_channel = ADC_CHANNEL_5; break;
         case 6: adc_channel = ADC_CHANNEL_6; break;
         case 7: adc_channel = ADC_CHANNEL_7; break;
-        default: snprintf(r, n, "ERROR: Invalid channel"); return strlen(r);
+        default: return carbon_respond_error(r, n, 2, "invalid channel");
     }
 
     adc_oneshot_chan_cfg_t config = {
@@ -48,26 +46,22 @@ static int adc_read_handler(const char *cmd, char *r, size_t n)
         .atten    = ADC_ATTEN_DB_12,
     };
     if (adc_oneshot_config_channel(adc1_handle, adc_channel, &config) != ESP_OK) {
-        snprintf(r, n, "ERROR: ADC channel config failed");
-        return strlen(r);
+        return carbon_respond_error(r, n, 3, "ADC channel config failed");
     }
 
     int raw = 0;
     if (adc_oneshot_read(adc1_handle, adc_channel, &raw) != ESP_OK) {
-        snprintf(r, n, "ERROR: ADC read failed");
-        return strlen(r);
+        return carbon_respond_error(r, n, 3, "ADC read failed");
     }
 
     int voltage_mv = 0;
     if (adc_cali_raw_to_voltage(adc1_cali_handle, raw, &voltage_mv) != ESP_OK) {
-        snprintf(r, n, "ERROR: ADC calibration failed");
-        return strlen(r);
+        return carbon_respond_error(r, n, 3, "ADC calibration failed");
     }
 
-    float voltage_v = voltage_mv / 1000.0f;
-    snprintf(r, n, "%.3f", voltage_v);
+    double voltage_v = voltage_mv / 1000.0;
     ESP_LOGI(TAG, "ADC ch%d: %d mV", channel, voltage_mv);
-    return strlen(r);
+    return carbon_respond_float(r, n, voltage_v);
 }
 
 void scpi_adc_init(void)

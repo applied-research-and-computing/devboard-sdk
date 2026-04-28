@@ -111,8 +111,7 @@ Include `carbon_instrument.h`, write your handler, declare a descriptor, registe
 
 ```c
 #include "carbon_instrument.h"
-#include <stdio.h>
-#include <string.h>
+#include "carbon_response.h"
 
 // Handler receives the full normalized SCPI string and writes the response.
 // Returns the byte length of the response (0 = no response).
@@ -121,15 +120,13 @@ static int pump_speed_handler(const char *cmd, char *r, size_t n)
     int speed;
     sscanf(cmd + 11, "%d", &speed);  // skip "PUMP:SPEED "
     set_pump_pwm(speed);             // your hardware call
-    snprintf(r, n, "OK");
-    return strlen(r);
+    return carbon_respond_enum(r, n, "OK");
 }
 
 static int temp_read_handler(const char *cmd, char *r, size_t n)
 {
-    float temp = read_temperature_sensor();  // your hardware call
-    snprintf(r, n, "%.2f", temp);
-    return strlen(r);
+    double temp = read_temperature_sensor();  // your hardware call
+    return carbon_respond_float(r, n, temp);
 }
 
 void register_my_commands(void)
@@ -215,6 +212,33 @@ carbon_register_command(&my_cmd);
 carbon_cmd_descriptor_t my_cmd = { ... };  // no static
 carbon_register_command(&my_cmd);
 ```
+
+## Response Formatting
+
+Include `carbon_response.h` to format handler responses in a format that Carbon's daemon can reliably parse into a `TypedValue`. Using raw `snprintf` is error-prone — the daemon may fail to parse the result silently.
+
+| Helper | TypedValue type | Output example |
+|--------|----------------|----------------|
+| `carbon_respond_float(r, n, 3.3)` | `float_value` | `"3.3"` |
+| `carbon_respond_int(r, n, 42)` | `int_value` | `"42"` |
+| `carbon_respond_bool(r, n, true)` | `bool_value` | `"1"` |
+| `carbon_respond_enum(r, n, "RISING")` | `enum_value` | `"RISING"` |
+| `carbon_respond_float_array(r, n, samples, 10)` | `float_array` | `"1.0,2.5,3.0,..."` |
+| `carbon_respond_error(r, n, 2, "invalid pin")` | _(error field)_ | `"ERR:2:invalid pin"` |
+
+All helpers return `strlen(resp)`, matching the handler return convention, and null-terminate on truncation. Use a buffer of at least 256 bytes (the SDK guarantees this for all handler calls).
+
+**Do not include physical units in the response string.** Units belong in the instrument profile's `response.unit` field:
+
+```c
+// Wrong — daemon cannot parse this as a float
+snprintf(r, n, "%.3f V", voltage);
+
+// Correct — unit goes in profile YAML, not here
+return carbon_respond_float(r, n, voltage);
+```
+
+Error codes convention: `1` = missing parameter, `2` = invalid argument, `3` = hardware failure.
 
 ## Built-in Commands
 
