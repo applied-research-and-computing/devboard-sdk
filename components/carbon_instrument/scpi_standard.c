@@ -5,6 +5,13 @@
 
 static const char *TAG = "scpi_std";
 
+static uint8_t *s_status_byte = NULL;
+
+void scpi_standard_set_status_source(uint8_t *ptr)
+{
+    s_status_byte = ptr;
+}
+
 static int idn_handler(const char *cmd, char *r, size_t n)
 {
     const carbon_instrument_config_t *cfg = carbon_instrument_get_config();
@@ -22,7 +29,17 @@ static int rst_handler(const char *cmd, char *r, size_t n)
 
 static int cls_handler(const char *cmd, char *r, size_t n)
 {
+    if (s_status_byte != NULL) {
+        *s_status_byte = 0;
+    }
     snprintf(r, n, "OK");
+    return strlen(r);
+}
+
+static int stb_handler(const char *cmd, char *r, size_t n)
+{
+    uint8_t stb = s_status_byte != NULL ? *s_status_byte : 0;
+    snprintf(r, n, "%u", stb);
     return strlen(r);
 }
 
@@ -82,6 +99,8 @@ void scpi_standard_init(void)
           .param_count = 1 },
         { .scpi_command = "*OPC?", .type = CARBON_CMD_QUERY, .group = "IEEE488",
           .description = "Operation complete query",     .timeout_ms = 500,  .handler = opc_handler },
+        { .scpi_command = "*STB?", .type = CARBON_CMD_QUERY, .group = "IEEE488",
+          .description = "Read status byte",             .timeout_ms = 500,  .handler = stb_handler },
         { .scpi_command = "*TST?", .type = CARBON_CMD_QUERY, .group = "IEEE488",
           .description = "Self-test query",              .timeout_ms = 2000, .handler = tst_handler },
         { .scpi_command = "*WAI",  .type = CARBON_CMD_WRITE, .group = "IEEE488",
