@@ -1,5 +1,14 @@
 menu "Carbon Instrument SDK"
 
+    config CARBON_HANDLER_TASK_STACK_SIZE
+        int "Command handler task stack size (bytes)"
+        default 6144
+        range 2048 32768
+        help
+            Stack size for the per-command watchdog handler task.
+            Set equal to the client task stack (6144) so handlers can
+            call the same driver libraries without stack overflow.
+
     config CARBON_MAX_COMMANDS
         int "Maximum registered commands"
         default 64

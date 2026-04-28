@@ -24,3 +24,7 @@ sdkconfig
 # for dev
 plugin_prompts
 sdk-planning/
+
+# generated or device-specific
+carbon_esp32_instrument.yaml
+test_signal.py
