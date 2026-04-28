@@ -24,18 +24,27 @@ static const char *TAG = "hislip_server";
 #define HISLIP_SYNC_PORT CONFIG_HISLIP_SYNC_PORT
 #endif
 
+#ifndef CONFIG_HISLIP_OVERLAP_DEPTH
+#define HISLIP_OVERLAP_DEPTH 4
+#else
+#define HISLIP_OVERLAP_DEPTH CONFIG_HISLIP_OVERLAP_DEPTH
+#endif
+
 #define HISLIP_LISTEN_BACKLOG         2
 #define HISLIP_ACCEPT_TASK_STACK_SIZE 4096
 #define HISLIP_CLIENT_TASK_STACK_SIZE 6144
 #define HISLIP_TASK_PRIORITY          (tskIDLE_PRIORITY + 5)
 #define SCPI_RESPONSE_BUF_SIZE        8192
 #define SOCKET_TIMEOUT_SEC            10
+#define PROC_DONE_BIT                 (1UL << 3)
 
 typedef struct {
     uint16_t          session_id;
+    int               sync_sock;          // set for the lifetime of sync_loop
     int               async_sock;         // -1 until async channel connects
     TaskHandle_t      sync_task;
     TaskHandle_t      async_task;
+    TaskHandle_t      proc_task;          // overlap mode command processor task
     bool              sync_open;
     bool              async_open;
     SemaphoreHandle_t lock;               // protects status_byte, async_sock, open flags
@@ -45,14 +54,22 @@ typedef struct {
     bool              remote_mode;
     bool              overlap_mode;
     volatile bool     device_clear_pending;
-    QueueHandle_t     cmd_queue;          // overlap mode command queue (NULL until step 2)
+    QueueHandle_t     cmd_queue;          // overlap mode command queue
 } hislip_session_t;
+
+typedef struct {
+    uint32_t message_id;
+    char    *cmd;   // heap-allocated; NULL is a shutdown sentinel
+    size_t   len;
+} hislip_pending_cmd_t;
 
 static hislip_session_t s_session = {
     .session_id           = 1,
+    .sync_sock            = -1,
     .async_sock           = -1,
     .sync_task            = NULL,
     .async_task           = NULL,
+    .proc_task            = NULL,
     .sync_open            = false,
     .async_open           = false,
     .lock                 = NULL,
@@ -90,16 +107,29 @@ static int send_error(int sock, uint8_t code)
     return hislip_send_message(sock, HISLIP_MSG_ERROR, code, 0, NULL, 0);
 }
 
-static int handle_initialize(int sock, uint32_t msg_param, const uint8_t *payload, size_t payload_len)
+static int handle_initialize(int sock, uint8_t client_cc, uint32_t msg_param,
+                             const uint8_t *payload, size_t payload_len)
 {
     uint16_t client_version = (uint16_t)((msg_param >> 16) & 0xFFFF);
-    uint16_t negotiated = client_version == 0 || client_version > 0x0100 ? 0x0100 : client_version;
+    uint16_t negotiated     = client_version == 0 || client_version > 0x0100 ? 0x0100 : client_version;
     uint16_t session_id;
+    bool     overlap        = (client_cc & 1) != 0;
+
+    if (overlap) {
+        QueueHandle_t q = xQueueCreate(HISLIP_OVERLAP_DEPTH, sizeof(hislip_pending_cmd_t));
+        if (q == NULL) {
+            ESP_LOGW(TAG, "Failed to create overlap queue, falling back to synchronized mode");
+            overlap = false;
+        } else {
+            s_session.cmd_queue = q;
+        }
+    }
 
     session_lock();
-    session_id            = s_session.session_id;
-    s_session.sync_open   = true;
-    s_session.status_byte = 0;
+    session_id             = s_session.session_id;
+    s_session.sync_open    = true;
+    s_session.status_byte  = 0;
+    s_session.overlap_mode = overlap;
     session_unlock();
 
     if (payload_len > 0) {
@@ -107,10 +137,11 @@ static int handle_initialize(int sock, uint32_t msg_param, const uint8_t *payloa
     }
 
     uint32_t response_param = ((uint32_t)negotiated << 16) | session_id;
-    ESP_LOGI(TAG, "Initialize: client=0x%04x negotiated=0x%04x session=%u",
-             client_version, negotiated, session_id);
+    ESP_LOGI(TAG, "Initialize: client=0x%04x negotiated=0x%04x session=%u mode=%s",
+             client_version, negotiated, session_id, overlap ? "overlap" : "synchronized");
 
-    return hislip_send_message(sock, HISLIP_MSG_INITIALIZE_RESPONSE, 0, response_param, NULL, 0);
+    return hislip_send_message(sock, HISLIP_MSG_INITIALIZE_RESPONSE, overlap ? 1 : 0,
+                               response_param, NULL, 0);
 }
 
 static int append_payload(uint8_t *buffer, size_t *buffer_len, const uint8_t *payload, size_t payload_len)
@@ -124,9 +155,49 @@ static int append_payload(uint8_t *buffer, size_t *buffer_len, const uint8_t *pa
     return 0;
 }
 
+static void command_processor_task(void *arg)
+{
+    char *response = malloc(SCPI_RESPONSE_BUF_SIZE);
+    if (response == NULL) {
+        ESP_LOGE(TAG, "Processor: failed to allocate response buffer");
+        xTaskNotify(s_session.sync_task, PROC_DONE_BIT, eSetBits);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    hislip_pending_cmd_t pending;
+    while (xQueueReceive(s_session.cmd_queue, &pending, portMAX_DELAY) == pdTRUE) {
+        if (pending.cmd == NULL) {
+            break;
+        }
+
+        ESP_LOGI(TAG, "SCPI command (overlap): %s", pending.cmd);
+        int response_len = scpi_parse_command(pending.cmd, response, SCPI_RESPONSE_BUF_SIZE);
+        free(pending.cmd);
+
+        if (response_len < 0) {
+            snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
+            response_len = strlen(response);
+        }
+
+        if (response_len > 0) {
+            hislip_send_message(s_session.sync_sock, HISLIP_MSG_DATA_END, 0, pending.message_id,
+                                (const uint8_t *)response, (uint64_t)response_len);
+            session_lock();
+            s_session.status_byte |= 0x10;  // set MAV
+            session_unlock();
+        }
+    }
+
+    free(response);
+    xTaskNotify(s_session.sync_task, PROC_DONE_BIT, eSetBits);
+    vTaskDelete(NULL);
+}
+
 static void sync_loop(int sock, uint8_t *rx_buffer)
 {
     s_session.sync_task = xTaskGetCurrentTaskHandle();
+    s_session.sync_sock = sock;
 
     uint8_t *command     = calloc(1, HISLIP_MAX_PAYLOAD_SIZE + 1);
     char    *response    = calloc(1, SCPI_RESPONSE_BUF_SIZE);
@@ -137,7 +208,18 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
         free(command);
         free(response);
         s_session.sync_task = NULL;
+        s_session.sync_sock = -1;
         return;
+    }
+
+    if (s_session.overlap_mode) {
+        BaseType_t ok = xTaskCreate(command_processor_task, "hislip_proc",
+                                    HISLIP_CLIENT_TASK_STACK_SIZE, NULL,
+                                    HISLIP_TASK_PRIORITY, &s_session.proc_task);
+        if (ok != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create processor task, falling back to synchronized mode");
+            s_session.overlap_mode = false;
+        }
     }
 
     while (1) {
@@ -164,26 +246,46 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
             }
 
             command[command_len] = '\0';
-            ESP_LOGI(TAG, "SCPI command: %s", (char *)command);
 
-            int response_len = scpi_parse_command((const char *)command, response, SCPI_RESPONSE_BUF_SIZE);
-            command_len = 0;
-
-            if (response_len < 0) {
-                snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
-                response_len = strlen(response);
-            }
-
-            if (response_len > 0) {
-                if (hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param,
-                                        (const uint8_t *)response, (uint64_t)response_len) < 0) {
-                    break;
+            if (s_session.overlap_mode) {
+                char *cmd_copy = malloc(command_len + 1);
+                if (cmd_copy == NULL) {
+                    ESP_LOGE(TAG, "Failed to allocate command copy");
+                    send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+                } else {
+                    memcpy(cmd_copy, command, command_len + 1);
+                    hislip_pending_cmd_t pending = {
+                        .message_id = msg_param,
+                        .cmd        = cmd_copy,
+                        .len        = command_len,
+                    };
+                    if (xQueueSend(s_session.cmd_queue, &pending, pdMS_TO_TICKS(1000)) != pdTRUE) {
+                        ESP_LOGW(TAG, "Command queue full, dropping command");
+                        free(cmd_copy);
+                        send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+                    }
+                }
+            } else {
+                ESP_LOGI(TAG, "SCPI command: %s", (char *)command);
+                int response_len = scpi_parse_command((const char *)command, response,
+                                                      SCPI_RESPONSE_BUF_SIZE);
+                if (response_len < 0) {
+                    snprintf(response, SCPI_RESPONSE_BUF_SIZE, "ERROR: Invalid command");
+                    response_len = strlen(response);
                 }
 
-                session_lock();
-                s_session.status_byte |= 0x10;  // set MAV
-                session_unlock();
+                if (response_len > 0) {
+                    if (hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param,
+                                            (const uint8_t *)response,
+                                            (uint64_t)response_len) < 0) {
+                        break;
+                    }
+                    session_lock();
+                    s_session.status_byte |= 0x10;  // set MAV
+                    session_unlock();
+                }
             }
+            command_len = 0;
         } else if (msg_type == HISLIP_MSG_TRIGGER) {
             ESP_LOGI(TAG, "Trigger received");
         } else if (msg_type == HISLIP_MSG_DEVICE_CLEAR_COMPLETE) {
@@ -196,9 +298,22 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
         }
     }
 
+    if (s_session.overlap_mode && s_session.proc_task != NULL) {
+        hislip_pending_cmd_t pending;
+        while (xQueueReceive(s_session.cmd_queue, &pending, 0) == pdTRUE) {
+            free(pending.cmd);
+        }
+        hislip_pending_cmd_t sentinel = {.cmd = NULL, .message_id = 0, .len = 0};
+        xQueueSend(s_session.cmd_queue, &sentinel, portMAX_DELAY);
+        uint32_t bits;
+        xTaskNotifyWait(0, PROC_DONE_BIT, &bits, pdMS_TO_TICKS(2000));
+        s_session.proc_task = NULL;
+    }
+
     free(command);
     free(response);
     s_session.sync_task = NULL;
+    s_session.sync_sock = -1;
 }
 
 static int handle_async_initialize(int sock, uint32_t msg_param)
@@ -321,12 +436,17 @@ static void client_task(void *arg)
     if (hislip_recv_message(sock, &msg_type, &control_code, &msg_param,
                             rx_buffer, HISLIP_MAX_PAYLOAD_SIZE, &payload_len) == 0) {
         if (msg_type == HISLIP_MSG_INITIALIZE) {
-            if (handle_initialize(sock, msg_param, rx_buffer, payload_len) == 0) {
+            if (handle_initialize(sock, control_code, msg_param, rx_buffer, payload_len) == 0) {
                 sync_loop(sock, rx_buffer);
             }
             session_lock();
-            s_session.sync_open   = false;
-            s_session.status_byte = 0;
+            s_session.sync_open    = false;
+            s_session.status_byte  = 0;
+            s_session.overlap_mode = false;
+            if (s_session.cmd_queue != NULL) {
+                vQueueDelete(s_session.cmd_queue);
+                s_session.cmd_queue = NULL;
+            }
             uint16_t next         = s_session.session_id + 1;
             s_session.session_id  = (next == 0) ? 1 : next;
             session_unlock();

@@ -38,4 +38,13 @@ menu "Carbon Instrument SDK"
             Compile in UART:WRITE, UART:READ?, and UART:CONFIG commands.
             Disable to reduce firmware size on devices that don't use UART passthrough.
 
+    config HISLIP_OVERLAP_DEPTH
+        int "HiSLIP overlap mode command queue depth"
+        default 4
+        range 1 16
+        help
+            Number of commands that can be queued when a client negotiates
+            overlap mode. Each slot holds a pointer (not an inline buffer),
+            so RAM cost is small. Increase if your client pipelines deeply.
+
 endmenu
