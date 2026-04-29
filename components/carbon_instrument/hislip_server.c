@@ -207,12 +207,20 @@ extern void carbon_fire_trigger(void);
 // pending operations, so it must be ordered behind queued commands.
 static bool is_fast_command(const char *cmd)
 {
+    // Strip trailing whitespace/newline — HiSLIP payloads include the "\n" the
+    // client appends, so compare only the command text itself.
+    const char *end = cmd + strlen(cmd);
+    while (end > cmd && (end[-1] == '\r' || end[-1] == '\n' || end[-1] == ' ')) {
+        --end;
+    }
+    size_t len = (size_t)(end - cmd);
+
     static const char *const fast[] = {
         "*IDN?", "*CLS", "*ESR?", "*ESE?", "*ESE",
         "*STB?", "*OPC?", "SYST:ERR?", "SYST:ERR:COUN?",
     };
     for (size_t i = 0; i < sizeof(fast) / sizeof(fast[0]); i++) {
-        if (strcasecmp(cmd, fast[i]) == 0) return true;
+        if (strlen(fast[i]) == len && strncasecmp(cmd, fast[i], len) == 0) return true;
     }
     return false;
 }
@@ -349,7 +357,12 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                     if (xQueueSend(s_session.cmd_queue, &pending, q_timeout) != pdTRUE) {
                         ESP_LOGW(TAG, "Command queue full, dropping command");
                         free(cmd_copy);
-                        send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+                        // Respond with a SCPI error payload on the normal DATA_END channel
+                        // so the client sees a command response rather than a protocol error.
+                        // Using msg_param preserves the message_id for overlap-mode matching.
+                        static const char queue_full[] = "-350,\"Queue overflow\"";
+                        sync_send(sock, HISLIP_MSG_DATA_END, 0, msg_param,
+                                  (const uint8_t *)queue_full, sizeof(queue_full) - 1);
                     } else if (!s_session.overlap_mode) {
                         // Sync mode: block until worker sends response or device clear interrupts.
                         xTaskNotifyWait(0, WORKER_DONE_BIT | DEVICE_CLEAR_BIT, NULL, portMAX_DELAY);

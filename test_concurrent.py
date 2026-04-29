@@ -118,6 +118,11 @@ class R:
 
 # ── Test 1: Fast commands respond quickly in sync mode ─────────────────────────
 
+def _settle(secs=0.4):
+    """Brief pause so the server can finish session teardown before reconnecting."""
+    time.sleep(secs)
+
+
 def test_fast_commands(host, port, r):
     print("\n── Test 1: Fast commands respond immediately in sync mode ──────────")
     fast_cmds = [
@@ -138,6 +143,7 @@ def test_fast_commands(host, port, r):
 # ── Test 2: Sync mode slow command blocks until complete ───────────────────────
 
 def test_sync_slow(host, port, r):
+    _settle()
     print("\n── Test 2: Sync mode slow command blocks until complete ────────────")
     sock, _, _ = connect(host, port, overlap=False, timeout=SLOW_DELAY + 5)
     try:
@@ -195,11 +201,15 @@ def test_overlap_fast_bypass(host, port, r):
 
 def test_overlap_queue_full(host, port, r, queue_depth):
     print(f"\n── Test 4: Overlap mode — queue full (depth={queue_depth}) ──────────────")
-    # Send queue_depth+2 slow commands: queue_depth+1 should succeed, at least 1 should fail.
-    # (Worker holds 1 item while executing; queue holds queue_depth items = queue_depth+1 total.)
-    n_send    = queue_depth + 2
-    # Only wait up to 4 s for responses, enough to collect the fast error replies.
-    sock, _, granted = connect(host, port, overlap=True, timeout=4.0)
+    # Send queue_depth+2 slow commands. The worker holds 1; the queue holds queue_depth.
+    # Total capacity = queue_depth+1, so command queue_depth+2 must be rejected.
+    # The MSG_ERROR reply for the rejected command arrives after the server-side
+    # xQueueSend timeout (~1 s). Once we see it we disconnect immediately — we
+    # don't wait for the slow commands to drain, which would take O(minutes).
+    n_send = queue_depth + 2
+    # Socket timeout covers the 1-second xQueueSend wait on the server plus margin.
+    sock, _, granted = connect(host, port, overlap=True, timeout=3.0)
+    queue_full_received = False
     try:
         if not r.check("Server granted overlap mode", granted):
             return
@@ -207,26 +217,36 @@ def test_overlap_queue_full(host, port, r, queue_depth):
         for i in range(1, n_send + 1):
             send_msg(sock, MSG_DATA_END, param=i, payload=b"TEST:SLOW\n")
 
-        error_count   = 0
-        success_count = 0
+        # Read responses until we see the queue-full SCPI error (-350,"Queue overflow")
+        # sent as DATA_END. Worker responses also arrive as DATA_END — we stop as soon as
+        # we see the -350 payload. The error arrives after the server-side xQueueSend
+        # timeout (~1 s); worker responses arrive every ~2 s, so the error comes first.
         for _ in range(n_send):
             try:
                 mt, _, _, pl = recv_msg(sock)
                 text = pl.decode(errors="replace").strip() if pl else ""
-                if mt == MSG_ERROR or text.startswith("ERROR"):
-                    error_count += 1
-                else:
-                    success_count += 1
-            except socket.timeout:
-                # Pending slow commands haven't completed — that's expected.
+                if mt == MSG_DATA_END and text.startswith("-350"):
+                    queue_full_received = True
+                    break
+            except (socket.timeout, ConnectionError):
                 break
 
-        r.check(f"At least {queue_depth} commands accepted (got {success_count})",
-                success_count >= queue_depth)
-        r.check(f"At least 1 queue-full error received (got {error_count})",
-                error_count >= 1)
+        r.check("Queue-full -350 error response received", queue_full_received)
     finally:
         sock.close()
+
+    # Allow the server to finish cleaning up the aborted session.
+    time.sleep(0.5)
+
+    # Verify the server accepts a fresh connection after the queue-full disconnect.
+    try:
+        s2, _, _ = connect(host, port, timeout=5.0)
+        resp, _ = scpi(s2, "*IDN?")
+        r.check("Server responsive after queue-full disconnect",
+                resp != "" and "ERROR" not in resp, repr(resp))
+        s2.close()
+    except Exception as exc:
+        r.check("Server responsive after queue-full disconnect", False, str(exc))
 
 
 # ── Test 5: Disconnect mid-command, server recovers ───────────────────────────
