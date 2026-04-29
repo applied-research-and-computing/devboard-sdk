@@ -1,4 +1,5 @@
 #include "carbon_param_parser.h"
+#include "carbon_error_queue.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -80,6 +81,7 @@ int carbon_parse_params(const char *cmd_tail,
             } else {
                 snprintf(response_buf, response_max,
                          "ERR:1:missing required parameter '%s'", d->name);
+                carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                 return -1;
             }
         }
@@ -95,12 +97,14 @@ int carbon_parse_params(const char *cmd_tail,
                     snprintf(response_buf, response_max,
                              "ERR:2:parameter '%s': expected integer, got '%s'",
                              d->name, token);
+                    carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                     return -1;
                 }
                 if (d->max > d->min && ((double)v < d->min || (double)v > d->max)) {
                     snprintf(response_buf, response_max,
                              "ERR:3:parameter '%s': %ld out of range [%.0f, %.0f]",
                              d->name, v, d->min, d->max);
+                    carbon_push_error(CARBON_ERR_PARAM_OUT_OF_RANGE, response_buf);
                     return -1;
                 }
                 out[i].int_val = (int)v;
@@ -113,12 +117,14 @@ int carbon_parse_params(const char *cmd_tail,
                     snprintf(response_buf, response_max,
                              "ERR:2:parameter '%s': expected float, got '%s'",
                              d->name, token);
+                    carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                     return -1;
                 }
                 if (d->max > d->min && ((double)v < d->min || (double)v > d->max)) {
                     snprintf(response_buf, response_max,
                              "ERR:3:parameter '%s': %g out of range [%g, %g]",
                              d->name, (double)v, d->min, d->max);
+                    carbon_push_error(CARBON_ERR_PARAM_OUT_OF_RANGE, response_buf);
                     return -1;
                 }
                 out[i].float_val = v;
@@ -136,6 +142,7 @@ int carbon_parse_params(const char *cmd_tail,
                     snprintf(response_buf, response_max,
                              "ERR:2:parameter '%s': expected boolean (0/1/true/false/on/off),"
                              " got '%s'", d->name, token);
+                    carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                     return -1;
                 }
                 out[i].bool_val = bv;
@@ -146,6 +153,7 @@ int carbon_parse_params(const char *cmd_tail,
                 if (scratch_used + len > scratch_len) {
                     snprintf(response_buf, response_max,
                              "ERR:2:parameter '%s': string too long", d->name);
+                    carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                     return -1;
                 }
                 memcpy(str_scratch + scratch_used, token, len);
@@ -172,6 +180,7 @@ int carbon_parse_params(const char *cmd_tail,
                     snprintf(response_buf, response_max,
                              "ERR:2:parameter '%s': expected %s, got '%s'",
                              d->name, valid, token);
+                    carbon_push_error(CARBON_ERR_INVALID_PARAM, response_buf);
                     return -1;
                 }
                 out[i].int_val = matched;

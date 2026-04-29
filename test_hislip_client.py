@@ -161,6 +161,32 @@ def test_errors(c: HiSLIPClient):
     check("Command too long", c.send("A" * 300),    "ERROR")
 
 
+def test_error_queue(c: HiSLIPClient):
+    print("\n── SCPI Error Queue ──")
+
+    # Start with a clean slate
+    c.send("*CLS")
+    check("SYST:ERR? (empty queue)",    c.send("SYST:ERR?"),       '0,"No error"')
+    check("SYST:ERR:COUN? (empty)",     c.send("SYST:ERR:COUN?"),  "0")
+
+    # Unknown command should push CARBON_ERR_UNDEFINED_COMMAND (-100)
+    c.send("NOTACOMMAND_ERRTEST")
+    check("SYST:ERR:COUN? after unknown cmd", c.send("SYST:ERR:COUN?"), "1")
+    check("SYST:ERR? pops -100 error",        c.send("SYST:ERR?"),      "-100,")
+
+    # Queue empty again after the pop
+    check("SYST:ERR? after pop (empty)", c.send("SYST:ERR?"), '0,"No error"')
+
+    # *CLS must clear the queue
+    c.send("NOTACOMMAND_ERRTEST")
+    c.send("NOTACOMMAND_ERRTEST")
+    count = c.send("SYST:ERR:COUN?")
+    ok = count == "2"
+    print(f"  [{'PASS' if ok else 'FAIL'}] COUN? after 2 errors: {count!r}  (expected '2')")
+    c.send("*CLS")
+    check("SYST:ERR:COUN? after *CLS", c.send("SYST:ERR:COUN?"), "0")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -181,6 +207,7 @@ def main():
         test_adc(c)
         test_introspection(c)
         test_errors(c)
+        test_error_queue(c)
         print("\n" + "=" * 55)
         print(" Done")
         print("=" * 55)

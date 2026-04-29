@@ -1,4 +1,5 @@
 #include "carbon_instrument.h"
+#include "carbon_error_queue.h"
 #include "hislip_server.h"
 #include "mdns_service.h"
 #include "mdns_debug.h"
@@ -65,6 +66,7 @@ extern void scpi_uart_init(void);
 
 void carbon_instrument_start(void)
 {
+    carbon_error_queue_init();
     ESP_LOGI(TAG, "Registering built-in commands");
     scpi_standard_init();
     scpi_system_init();

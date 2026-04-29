@@ -1,5 +1,6 @@
 set(SRCS
     "carbon_instrument.c"
+    "carbon_error_queue.c"
     "carbon_registry.c"
     "carbon_param_parser.c"
     "carbon_response.c"

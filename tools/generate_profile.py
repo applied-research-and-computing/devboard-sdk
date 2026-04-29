@@ -97,8 +97,10 @@ _RESPONSE_TYPES: dict = {
     "*OPC?":     "bool",   # completion flag — always returns 1 when pending ops finish
     "*ESR?":     "int",
     "*ESE?":     "int",
-    "UART:READ?": "enum",   # received bytes returned as text
-    "GPIO:GET?":  "bool",   # digital pin level: 0 (low) or 1 (high)
+    "UART:READ?":     "enum",   # received bytes returned as text
+    "GPIO:GET?":      "bool",   # digital pin level: 0 (low) or 1 (high)
+    "SYST:ERR?":      "enum",   # returns code,"message" e.g. 0,"No error"
+    "SYST:ERR:COUN?": "int",    # queue depth
 }
 
 _RESPONSE_UNITS: dict = {
