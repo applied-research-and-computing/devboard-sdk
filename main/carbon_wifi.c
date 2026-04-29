@@ -30,8 +30,9 @@ static const char *TAG = "carbon-wifi";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 
-/* Suppresses STA connect/retry logic while the provisioning manager is active */
-static bool s_prov_active = false;
+/* Suppresses STA connect/retry logic while the provisioning manager is active.
+ * Written from event handler, read from main task — volatile prevents caching. */
+static volatile bool s_prov_active = false;
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
@@ -88,14 +89,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             esp_wifi_connect();
         } else {
             ESP_LOGE(TAG, "WiFi connection failed after %d retries", CONFIG_CARBON_WIFI_MAX_RETRY);
-#ifdef CONFIG_CARBON_ENABLE_WIFI_PROVISIONING
-            ESP_LOGW(TAG, "Erasing stored credentials and rebooting to provisioning mode");
-            wifi_prov_mgr_reset_provisioning();
-            vTaskDelay(pdMS_TO_TICKS(500));
-            esp_restart();
-#else
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-#endif
         }
     }
 }
@@ -114,6 +108,7 @@ static bool provision_gpio_held(void)
     gpio_config(&io);
     /* Active low: button connects GPIO to GND */
     bool held = (gpio_get_level(CONFIG_CARBON_PROVISION_GPIO) == 0);
+    gpio_reset_pin(CONFIG_CARBON_PROVISION_GPIO);  /* Boot-time check only; release for other uses */
     if (held) {
         ESP_LOGW(TAG, "GPIO %d held low: forcing re-provisioning", CONFIG_CARBON_PROVISION_GPIO);
     }
@@ -177,11 +172,25 @@ bool carbon_wifi_init(void)
         esp_netif_create_default_wifi_ap();
 #endif
 
+        wifi_prov_security_t security =
+#ifdef CONFIG_CARBON_PROVISION_SECURITY_0
+            WIFI_PROV_SECURITY_0;
+#else
+            WIFI_PROV_SECURITY_1;
+#endif
+        const char *pop = (strlen(CONFIG_CARBON_PROVISION_POP) > 0)
+                          ? CONFIG_CARBON_PROVISION_POP : NULL;
+
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
-            WIFI_PROV_SECURITY_1, NULL, service_name, NULL));
+            security, pop, service_name, NULL));
 
         /* Blocks until WIFI_PROV_END; IP is obtained before this returns */
-        wifi_prov_mgr_wait();
+        esp_err_t prov_err = wifi_prov_mgr_wait();
+        if (prov_err != ESP_OK) {
+            ESP_LOGE(TAG, "Provisioning error: %s", esp_err_to_name(prov_err));
+            wifi_prov_mgr_deinit();
+            return false;
+        }
         /* wifi_prov_mgr_deinit() already called from WIFI_PROV_END handler */
     } else {
         /* Already provisioned: connect using NVS-stored credentials */
@@ -211,6 +220,17 @@ bool carbon_wifi_init(void)
     if (bits & WIFI_CONNECTED_BIT) {
         return true;
     }
+
+#ifdef CONFIG_CARBON_ENABLE_WIFI_PROVISIONING
+    /* Stored credentials exhausted retries; reset NVS and reboot to provisioning mode.
+     * Done here (main task) rather than in the event handler to avoid blocking NVS
+     * operations inside an event callback. */
+    ESP_LOGW(TAG, "Erasing stored credentials; rebooting into provisioning mode");
+    wifi_prov_mgr_reset_provisioning();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+#endif
+
     ESP_LOGE(TAG, "Network unavailable");
     return false;
 }

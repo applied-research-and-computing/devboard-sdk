@@ -78,6 +78,38 @@ menu "Carbon HiSLIP Instrument Configuration"
 
     endchoice
 
+    choice CARBON_PROVISION_SECURITY
+        prompt "Provisioning security level"
+        depends on CARBON_ENABLE_WIFI_PROVISIONING
+        default CARBON_PROVISION_SECURITY_1
+        help
+            Security scheme used during provisioning.
+
+        config CARBON_PROVISION_SECURITY_0
+            bool "Security 0 (no encryption)"
+            help
+                Credentials transmitted in plaintext. Use only on isolated
+                networks where eavesdropping is not a concern.
+
+        config CARBON_PROVISION_SECURITY_1
+            bool "Security 1 (SRP6a encrypted)"
+            help
+                Credentials encrypted via SRP6a key exchange. Recommended
+                for all deployments. Optionally combined with a
+                proof-of-possession string (CARBON_PROVISION_POP).
+
+    endchoice
+
+    config CARBON_PROVISION_POP
+        string "Proof-of-possession string"
+        default ""
+        depends on CARBON_PROVISION_SECURITY_1
+        help
+            Optional string the provisioning app must supply to complete
+            pairing, preventing unauthorized provisioning of nearby devices.
+            Print this on a device label or display it on a screen.
+            Leave empty to skip PoP verification.
+
     config CARBON_PROVISION_GPIO_ENABLE
         bool "Enable provisioning reset GPIO"
         default n
