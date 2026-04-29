@@ -1,2 +1,2 @@
 dependencies:
-  espressif/wifi_provisioning: ">=0.0.1"
+  espressif/network_provisioning: "^1.0.0"

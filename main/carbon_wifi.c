@@ -11,11 +11,12 @@
 #include "esp_system.h"
 
 #ifdef CONFIG_CARBON_ENABLE_WIFI_PROVISIONING
-#include "wifi_provisioning/manager.h"
+#include "network_provisioning/manager.h"
+#include "network_provisioning/network_config.h"
 #ifdef CONFIG_CARBON_PROVISION_BLE
-#include "wifi_provisioning/scheme_ble.h"
+#include "network_provisioning/scheme_ble.h"
 #else
-#include "wifi_provisioning/scheme_softap.h"
+#include "network_provisioning/scheme_softap.h"
 #endif
 #ifdef CONFIG_CARBON_PROVISION_GPIO_ENABLE
 #include "driver/gpio.h"
@@ -46,29 +47,29 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
     }
 
 #ifdef CONFIG_CARBON_ENABLE_WIFI_PROVISIONING
-    if (base == WIFI_PROV_EVENT) {
+    if (base == NETWORK_PROV_EVENT) {
         switch (id) {
-        case WIFI_PROV_START:
+        case NETWORK_PROV_START:
             ESP_LOGI(TAG, "WiFi provisioning started");
             break;
-        case WIFI_PROV_CRED_RECV: {
-            wifi_sta_config_t *cfg = (wifi_sta_config_t *)data;
-            ESP_LOGI(TAG, "Credentials received for SSID: %.32s", (const char *)cfg->ssid);
+        case NETWORK_PROV_WIFI_CRED_RECV: {
+            network_prov_config_set_wifi_data_t *cfg = (network_prov_config_set_wifi_data_t *)data;
+            ESP_LOGI(TAG, "Credentials received for SSID: %.32s", cfg->ssid);
             break;
         }
-        case WIFI_PROV_CRED_FAIL: {
-            wifi_prov_sta_fail_reason_t *reason = (wifi_prov_sta_fail_reason_t *)data;
+        case NETWORK_PROV_WIFI_CRED_FAIL: {
+            network_prov_wifi_sta_fail_reason_t *reason = (network_prov_wifi_sta_fail_reason_t *)data;
             ESP_LOGE(TAG, "Provisioning credential failure: %s",
-                     *reason == WIFI_PROV_STA_AUTH_ERROR ? "auth error" : "AP not found");
-            wifi_prov_mgr_reset_sm_state_on_failure();
+                     *reason == NETWORK_PROV_WIFI_STA_AUTH_ERROR ? "auth error" : "AP not found");
+            network_prov_mgr_reset_wifi_sm_state_on_failure();
             break;
         }
-        case WIFI_PROV_CRED_SUCCESS:
+        case NETWORK_PROV_WIFI_CRED_SUCCESS:
             ESP_LOGI(TAG, "Provisioning credentials accepted");
             break;
-        case WIFI_PROV_END:
+        case NETWORK_PROV_END:
             s_prov_active = false;
-            wifi_prov_mgr_deinit();
+            network_prov_mgr_deinit();
             break;
         }
         return;
@@ -136,27 +137,27 @@ bool carbon_wifi_init(void)
 
 #ifdef CONFIG_CARBON_ENABLE_WIFI_PROVISIONING
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL));
+        NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL));
 
-    wifi_prov_mgr_config_t prov_cfg = {
+    network_prov_mgr_config_t prov_cfg = {
 #ifdef CONFIG_CARBON_PROVISION_BLE
-        .scheme               = wifi_prov_scheme_ble,
-        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+        .scheme               = network_prov_scheme_ble,
+        .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
 #else
-        .scheme               = wifi_prov_scheme_softap,
-        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE,
+        .scheme               = network_prov_scheme_softap,
+        .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE,
 #endif
     };
-    ESP_ERROR_CHECK(wifi_prov_mgr_init(prov_cfg));
+    ESP_ERROR_CHECK(network_prov_mgr_init(prov_cfg));
 
     bool provisioned = false;
-    ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
+    ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
 
     bool force_reprov = !provisioned || provision_gpio_held();
     if (force_reprov) {
         if (provisioned) {
             /* GPIO held: clear stored credentials so we re-provision fresh */
-            wifi_prov_mgr_reset_provisioning();
+            network_prov_mgr_reset_wifi_provisioning();
         }
         s_prov_active = true;
 
@@ -172,29 +173,29 @@ bool carbon_wifi_init(void)
         esp_netif_create_default_wifi_ap();
 #endif
 
-        wifi_prov_security_t security =
+        network_prov_security_t security =
 #ifdef CONFIG_CARBON_PROVISION_SECURITY_0
-            WIFI_PROV_SECURITY_0;
+            NETWORK_PROV_SECURITY_0;
 #else
-            WIFI_PROV_SECURITY_1;
+            NETWORK_PROV_SECURITY_1;
 #endif
         const char *pop = (strlen(CONFIG_CARBON_PROVISION_POP) > 0)
                           ? CONFIG_CARBON_PROVISION_POP : NULL;
 
-        ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(
+        ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
             security, pop, service_name, NULL));
 
-        /* Blocks until WIFI_PROV_END; IP is obtained before this returns */
-        esp_err_t prov_err = wifi_prov_mgr_wait();
+        /* Blocks until NETWORK_PROV_END; IP is obtained before this returns */
+        esp_err_t prov_err = network_prov_mgr_wait();
         if (prov_err != ESP_OK) {
             ESP_LOGE(TAG, "Provisioning error: %s", esp_err_to_name(prov_err));
-            wifi_prov_mgr_deinit();
+            network_prov_mgr_deinit();
             return false;
         }
-        /* wifi_prov_mgr_deinit() already called from WIFI_PROV_END handler */
+        /* network_prov_mgr_deinit() already called from NETWORK_PROV_END handler */
     } else {
         /* Already provisioned: connect using NVS-stored credentials */
-        wifi_prov_mgr_deinit();
+        network_prov_mgr_deinit();
         esp_netif_create_default_wifi_sta();
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
@@ -226,7 +227,7 @@ bool carbon_wifi_init(void)
      * Done here (main task) rather than in the event handler to avoid blocking NVS
      * operations inside an event callback. */
     ESP_LOGW(TAG, "Erasing stored credentials; rebooting into provisioning mode");
-    wifi_prov_mgr_reset_provisioning();
+    network_prov_mgr_reset_wifi_provisioning();
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
 #endif

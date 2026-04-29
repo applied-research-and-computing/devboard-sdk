@@ -1,6 +1,6 @@
 set(extra_requires "")
 if(CONFIG_CARBON_ENABLE_WIFI_PROVISIONING)
-    list(APPEND extra_requires wifi_provisioning)
+    list(APPEND extra_requires network_provisioning)
     if(CONFIG_CARBON_PROVISION_BLE)
         list(APPEND extra_requires bt)
     endif()
