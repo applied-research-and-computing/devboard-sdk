@@ -1,0 +1,2 @@
+dependencies:
+  espressif/wifi_provisioning: ">=0.0.1"
