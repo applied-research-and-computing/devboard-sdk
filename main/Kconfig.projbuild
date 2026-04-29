@@ -3,14 +3,18 @@ menu "Carbon HiSLIP Instrument Configuration"
     config WIFI_SSID
         string "WiFi SSID"
         default "myssid"
+        depends on !CARBON_ENABLE_WIFI_PROVISIONING
         help
             SSID (network name) for the ESP32 to connect to.
+            Not used when CARBON_ENABLE_WIFI_PROVISIONING is enabled.
 
     config WIFI_PASSWORD
         string "WiFi Password"
         default "mypassword"
+        depends on !CARBON_ENABLE_WIFI_PROVISIONING
         help
             WiFi password (WPA or WPA2) for the access point.
+            Not used when CARBON_ENABLE_WIFI_PROVISIONING is enabled.
 
     config DEVICE_SERIAL
         string "Device Serial Number"
@@ -29,5 +33,66 @@ menu "Carbon HiSLIP Instrument Configuration"
         default 4880
         help
             TCP listener port for HiSLIP data and control connections.
+
+    config CARBON_WIFI_MAX_RETRY
+        int "WiFi connection maximum retries"
+        default 5
+        range 1 20
+        help
+            Number of times to retry a WiFi connection before giving up.
+            When provisioning is enabled, exhausting retries erases stored
+            credentials and reboots the device into provisioning mode.
+
+    config CARBON_ENABLE_WIFI_PROVISIONING
+        bool "Enable runtime WiFi provisioning (BLE/SoftAP)"
+        default n
+        help
+            When enabled, WiFi credentials are configured at runtime via BLE
+            or SoftAP instead of at compile-time via WIFI_SSID/WIFI_PASSWORD.
+            On first boot (or when the reset GPIO is held low at boot), the
+            device enters provisioning mode and advertises a network named
+            "CARBON-XXXXXX". Credentials are stored in NVS; subsequent boots
+            connect automatically. If stored credentials fail after
+            CARBON_WIFI_MAX_RETRY retries, credentials are erased and the
+            device reboots into provisioning mode.
+
+    choice CARBON_PROVISION_TRANSPORT
+        prompt "Provisioning transport"
+        depends on CARBON_ENABLE_WIFI_PROVISIONING
+        default CARBON_PROVISION_SOFTAP
+        help
+            Transport used to deliver WiFi credentials to the device.
+
+        config CARBON_PROVISION_SOFTAP
+            bool "SoftAP"
+            help
+                Device creates a Wi-Fi access point named "CARBON-XXXXXX".
+                Connect to it and use the Espressif Provisioning app or a
+                browser to enter credentials.
+
+        config CARBON_PROVISION_BLE
+            bool "BLE"
+            help
+                Device advertises via Bluetooth LE. Requires an ESP32 with
+                BLE support. Use the Espressif BLE Provisioning app.
+
+    endchoice
+
+    config CARBON_PROVISION_GPIO_ENABLE
+        bool "Enable provisioning reset GPIO"
+        default n
+        depends on CARBON_ENABLE_WIFI_PROVISIONING
+        help
+            When enabled, holding the specified GPIO pin low at boot clears
+            stored WiFi credentials and forces provisioning mode.
+
+    config CARBON_PROVISION_GPIO
+        int "Provisioning reset GPIO pin number"
+        default 0
+        range 0 39
+        depends on CARBON_PROVISION_GPIO_ENABLE
+        help
+            GPIO pin monitored for provisioning reset. Active low with
+            internal pull-up. Hold low at power-on to re-enter provisioning.
 
 endmenu
