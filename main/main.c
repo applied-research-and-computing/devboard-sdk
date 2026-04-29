@@ -16,6 +16,7 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "carbon_instrument.h"
+#include "carbon_response.h"
 
 /* WiFi configuration - will be replaced with Kconfig in Phase 5 */
 #define WIFI_SSID      CONFIG_WIFI_SSID
@@ -120,6 +121,23 @@ static bool wifi_init_sta(void)
     }
 }
 
+// Sleeps 2 s then returns 1. Registered as TEST:SLOW for concurrency testing.
+static int test_slow_handler(const char *cmd, char *r, size_t n)
+{
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    return carbon_respond_int(r, n, 1);
+}
+
+static const carbon_cmd_descriptor_t test_slow_cmd = {
+    .scpi_command = "TEST:SLOW",
+    .type         = CARBON_CMD_QUERY,
+    .group        = "Test",
+    .description  = "Sleeps 2 s then returns 1; used to test concurrent command execution",
+    .param_count  = 0,
+    .timeout_ms   = 5000,
+    .handler      = test_slow_handler,
+};
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Carbon HiSLIP Instrument starting...");
@@ -138,5 +156,6 @@ void app_main(void)
         return;
     }
 
+    carbon_register_command(&test_slow_cmd);
     carbon_instrument_start();
 }
