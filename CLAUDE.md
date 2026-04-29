@@ -26,6 +26,25 @@ idf.py -p /dev/ttyUSB0 monitor  # Serial console
 idf.py fullclean         # Wipe build artifacts
 ```
 
+## ESP-IDF v6.0 Component Changes
+
+**This project targets ESP-IDF v6.0**, which introduced breaking changes to component organization:
+
+### Core vs. External Components
+
+- **Core components** (built into ESP-IDF): `esp_wifi`, `esp_netif`, `nvs_flash`, `driver`, `freertos`, `bt`, etc. — use directly in `CMakeLists.txt` `REQUIRES`
+- **External components** (managed via `idf_component.yml`): `network_provisioning`, `esp_insights`, `esp_rainmaker`, etc. — must be declared in `idf_component.yml` dependencies
+
+### Key Migration from v5.x
+
+| v5.x Component | v6.0 Replacement | How to Use |
+|----------------|------------------|------------|
+| `wifi_provisioning` | `espressif/network_provisioning` | Add to `idf_component.yml` |
+| `protocomm` | `espressif/protocomm` | Add to `idf_component.yml` |
+| Headers like `wifi_provisioning/manager.h` | `network_provisioning/manager.h` | Update includes after adding dependency |
+
+**When adding new features**: Check if the component is in `$IDF_PATH/components/` (core) or requires an external dependency. If `#include` fails with "no such file", the component likely moved to the component registry in v6.0.
+
 ## Running Tests
 
 Tests are integration-level Python/shell scripts — there are no native unit tests. The device must be flashed and on the network.
