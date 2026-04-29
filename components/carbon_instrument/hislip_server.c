@@ -24,10 +24,10 @@ static const char *TAG = "hislip_server";
 #define HISLIP_SYNC_PORT CONFIG_HISLIP_SYNC_PORT
 #endif
 
-#ifndef CONFIG_HISLIP_OVERLAP_DEPTH
-#define HISLIP_OVERLAP_DEPTH 4
+#ifndef CONFIG_HISLIP_WORKER_QUEUE_DEPTH
+#define HISLIP_WORKER_QUEUE_DEPTH 8
 #else
-#define HISLIP_OVERLAP_DEPTH CONFIG_HISLIP_OVERLAP_DEPTH
+#define HISLIP_WORKER_QUEUE_DEPTH CONFIG_HISLIP_WORKER_QUEUE_DEPTH
 #endif
 
 #define HISLIP_LISTEN_BACKLOG         2
@@ -38,6 +38,7 @@ static const char *TAG = "hislip_server";
 #define SOCKET_TIMEOUT_SEC            10
 #define DEVICE_CLEAR_BIT              (1UL << 2)
 #define PROC_DONE_BIT                 (1UL << 3)
+#define WORKER_DONE_BIT               (1UL << 4)
 
 typedef struct {
     uint16_t          session_id;
@@ -45,24 +46,26 @@ typedef struct {
     int               async_sock;         // -1 until async channel connects
     TaskHandle_t      sync_task;
     TaskHandle_t      async_task;
-    TaskHandle_t      proc_task;          // overlap mode command processor task
+    TaskHandle_t      proc_task;          // worker task: always-on command executor
     bool              sync_open;
     bool              async_open;
     SemaphoreHandle_t lock;               // protects status_byte, async_sock, open flags
     SemaphoreHandle_t async_send_lock;    // serialises writes to async_sock
+    SemaphoreHandle_t sync_send_lock;     // serialises writes to sync_sock
     SemaphoreHandle_t clear_done;         // sync signals async after completing device clear
     uint8_t           status_byte;        // IEEE 488.2 status byte (MAV = bit 4)
     bool              remote_mode;
     bool              overlap_mode;
     volatile bool     device_clear_pending;
-    QueueHandle_t     cmd_queue;          // overlap mode command queue
+    QueueHandle_t     cmd_queue;          // command queue: always active
 } hislip_session_t;
 
 typedef struct {
-    uint32_t message_id;
-    char    *cmd;        // heap-allocated; NULL + !is_trigger = shutdown sentinel
-    size_t   len;
-    bool     is_trigger; // true for TRIGGER messages; cmd is unused
+    uint32_t     message_id;
+    char        *cmd;           // heap-allocated; NULL + !is_trigger = shutdown sentinel
+    size_t       len;
+    bool         is_trigger;    // true for TRIGGER messages; cmd is unused
+    TaskHandle_t notify_task;   // non-NULL in sync mode: worker notifies server on completion
 } hislip_pending_cmd_t;
 
 static hislip_session_t s_session = {
@@ -76,6 +79,7 @@ static hislip_session_t s_session = {
     .async_open           = false,
     .lock                 = NULL,
     .async_send_lock      = NULL,
+    .sync_send_lock       = NULL,
     .clear_done           = NULL,
     .status_byte          = 0,
     .remote_mode          = false,
@@ -127,6 +131,18 @@ static int async_send(int sock, uint8_t msg_type, uint8_t cc, uint32_t param,
     return ret;
 }
 
+// Serialised write to the sync socket. Used by the worker task and the server task
+// fast-path (overlap mode) to prevent interleaving, and by async_loop for
+// DEVICE_CLEAR_COMPLETE which shares the sync channel.
+static int sync_send(int sock, uint8_t msg_type, uint8_t cc, uint32_t param,
+                     const uint8_t *payload, uint64_t len)
+{
+    xSemaphoreTake(s_session.sync_send_lock, portMAX_DELAY);
+    int ret = hislip_send_message(sock, msg_type, cc, param, payload, len);
+    xSemaphoreGive(s_session.sync_send_lock);
+    return ret;
+}
+
 // Emit ASYNC_SERVICE_REQUEST to notify the client that status has changed.
 // No-op if the async channel is not yet open.
 static void emit_srq(uint8_t stb)
@@ -146,14 +162,11 @@ static int handle_initialize(int sock, uint8_t client_cc, uint32_t msg_param,
     uint16_t session_id;
     bool     overlap        = (client_cc & 1) != 0;
 
-    if (overlap) {
-        QueueHandle_t q = xQueueCreate(HISLIP_OVERLAP_DEPTH, sizeof(hislip_pending_cmd_t));
-        if (q == NULL) {
-            ESP_LOGW(TAG, "Failed to create overlap queue, falling back to synchronized mode");
-            overlap = false;
-        } else {
-            s_session.cmd_queue = q;
-        }
+    s_session.cmd_queue = xQueueCreate(HISLIP_WORKER_QUEUE_DEPTH, sizeof(hislip_pending_cmd_t));
+    if (s_session.cmd_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create worker queue");
+        send_fatal_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+        return -1;
     }
 
     session_lock();
@@ -188,6 +201,22 @@ static int append_payload(uint8_t *buffer, size_t *buffer_len, const uint8_t *pa
 
 extern void carbon_fire_trigger(void);
 
+// Commands handled inline on the server task, bypassing the worker queue.
+// All have timeout_ms <= 500 and perform only register reads or queue pops —
+// no hardware I/O. *WAI is excluded: its purpose is to synchronise with
+// pending operations, so it must be ordered behind queued commands.
+static bool is_fast_command(const char *cmd)
+{
+    static const char *const fast[] = {
+        "*IDN?", "*CLS", "*ESR?", "*ESE?", "*ESE",
+        "*STB?", "*OPC?", "SYST:ERR?", "SYST:ERR:COUN?",
+    };
+    for (size_t i = 0; i < sizeof(fast) / sizeof(fast[0]); i++) {
+        if (strcasecmp(cmd, fast[i]) == 0) return true;
+    }
+    return false;
+}
+
 static void command_processor_task(void *arg)
 {
     char *response = malloc(SCPI_RESPONSE_BUF_SIZE);
@@ -205,18 +234,8 @@ static void command_processor_task(void *arg)
             break;
         }
 
-        // TRIGGER message: fire callback and ack; skip if device clear is in progress
-        if (pending.is_trigger) {
-            if (!s_session.device_clear_pending) {
-                carbon_fire_trigger();
-                hislip_send_message(s_session.sync_sock, HISLIP_MSG_DATA_END, 0,
-                                    pending.message_id, NULL, 0);
-            }
-            continue;
-        }
-
         // Normal SCPI command
-        ESP_LOGI(TAG, "SCPI command (overlap): %s", pending.cmd);
+        ESP_LOGI(TAG, "SCPI command (worker): %s", pending.cmd);
         int response_len = scpi_parse_command(pending.cmd, response, SCPI_RESPONSE_BUF_SIZE);
         free(pending.cmd);
 
@@ -227,6 +246,8 @@ static void command_processor_task(void *arg)
             }
             xTaskNotifyStateClear(NULL);  // discard stale DEVICE_CLEAR_BIT
             continue;                     // sync_loop handles *CLS via DEVICE_CLEAR_ACK
+            // Note: notify_task not signalled here; async_loop already woke sync_task
+            // via DEVICE_CLEAR_BIT before this continue path is reached.
         }
 
         if (response_len < 0) {
@@ -235,14 +256,17 @@ static void command_processor_task(void *arg)
         }
 
         if (response_len > 0) {
-            hislip_send_message(s_session.sync_sock, HISLIP_MSG_DATA_END, 0, pending.message_id,
-                                (const uint8_t *)response, (uint64_t)response_len);
+            sync_send(s_session.sync_sock, HISLIP_MSG_DATA_END, 0, pending.message_id,
+                      (const uint8_t *)response, (uint64_t)response_len);
             uint8_t stb;
             session_lock();
             s_session.status_byte |= 0x10;  // set MAV
             stb = s_session.status_byte;
             session_unlock();
             emit_srq(stb);
+        }
+        if (pending.notify_task) {
+            xTaskNotify(pending.notify_task, WORKER_DONE_BIT, eSetBits);
         }
     }
 
@@ -270,13 +294,13 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
         return;
     }
 
-    if (s_session.overlap_mode) {
-        BaseType_t ok = xTaskCreate(command_processor_task, "hislip_proc",
+    {
+        BaseType_t ok = xTaskCreate(command_processor_task, "hislip_worker",
                                     HISLIP_CLIENT_TASK_STACK_SIZE, NULL,
                                     HISLIP_TASK_PRIORITY, &s_session.proc_task);
         if (ok != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create processor task, falling back to synchronized mode");
-            s_session.overlap_mode = false;
+            ESP_LOGE(TAG, "Failed to create worker task, falling back to inline mode");
+            s_session.proc_task = NULL;
         }
     }
 
@@ -305,7 +329,8 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
 
             command[command_len] = '\0';
 
-            if (s_session.overlap_mode) {
+            if (s_session.proc_task != NULL && !is_fast_command((char *)command)) {
+                // Slow path: enqueue for worker task execution.
                 char *cmd_copy = malloc(command_len + 1);
                 if (cmd_copy == NULL) {
                     ESP_LOGE(TAG, "Failed to allocate command copy");
@@ -313,18 +338,27 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                 } else {
                     memcpy(cmd_copy, command, command_len + 1);
                     hislip_pending_cmd_t pending = {
-                        .message_id = msg_param,
-                        .cmd        = cmd_copy,
-                        .len        = command_len,
+                        .message_id  = msg_param,
+                        .cmd         = cmd_copy,
+                        .len         = command_len,
+                        .notify_task = s_session.overlap_mode ? NULL : xTaskGetCurrentTaskHandle(),
                     };
-                    if (xQueueSend(s_session.cmd_queue, &pending, pdMS_TO_TICKS(1000)) != pdTRUE) {
+                    TickType_t q_timeout = s_session.overlap_mode
+                                          ? pdMS_TO_TICKS(1000)
+                                          : portMAX_DELAY;
+                    if (xQueueSend(s_session.cmd_queue, &pending, q_timeout) != pdTRUE) {
                         ESP_LOGW(TAG, "Command queue full, dropping command");
                         free(cmd_copy);
                         send_error(sock, HISLIP_ERROR_UNIDENTIFIED);
+                    } else if (!s_session.overlap_mode) {
+                        // Sync mode: block until worker sends response or device clear interrupts.
+                        xTaskNotifyWait(0, WORKER_DONE_BIT | DEVICE_CLEAR_BIT, NULL, portMAX_DELAY);
                     }
                 }
             } else {
-                ESP_LOGI(TAG, "SCPI command: %s", (char *)command);
+                // Fast path: handle inline on the server task. Also used as fallback
+                // if the worker task failed to start (proc_task == NULL).
+                ESP_LOGI(TAG, "SCPI command (inline): %s", (char *)command);
                 int response_len = scpi_parse_command((const char *)command, response,
                                                       SCPI_RESPONSE_BUF_SIZE);
 
@@ -335,9 +369,9 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
                     }
 
                     if (response_len > 0) {
-                        if (hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param,
-                                                (const uint8_t *)response,
-                                                (uint64_t)response_len) < 0) {
+                        if (sync_send(sock, HISLIP_MSG_DATA_END, 0, msg_param,
+                                      (const uint8_t *)response,
+                                      (uint64_t)response_len) < 0) {
                             break;
                         }
                         uint8_t stb;
@@ -351,20 +385,11 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
             }
             command_len = 0;
         } else if (msg_type == HISLIP_MSG_TRIGGER) {
-            if (s_session.overlap_mode) {
-                hislip_pending_cmd_t trig = {
-                    .message_id = msg_param,
-                    .is_trigger = true,
-                };
-                if (xQueueSend(s_session.cmd_queue, &trig, pdMS_TO_TICKS(1000)) != pdTRUE) {
-                    ESP_LOGW(TAG, "Trigger dropped: command queue full");
-                }
-            } else {
-                carbon_fire_trigger();
-                hislip_send_message(sock, HISLIP_MSG_DATA_END, 0, msg_param, NULL, 0);
-            }
+            // Triggers are always handled inline for lowest latency.
+            carbon_fire_trigger();
+            sync_send(sock, HISLIP_MSG_DATA_END, 0, msg_param, NULL, 0);
         } else if (msg_type == HISLIP_MSG_DEVICE_CLEAR_ACK) {
-            xTaskNotifyStateClear(NULL);  // discard any stale DEVICE_CLEAR_BIT
+            xTaskNotifyStateClear(NULL);  // discard stale DEVICE_CLEAR_BIT and WORKER_DONE_BIT
             command_len = 0;
             scpi_parse_command("*CLS", response, SCPI_RESPONSE_BUF_SIZE);
             s_session.device_clear_pending = false;
@@ -387,7 +412,7 @@ static void sync_loop(int sock, uint8_t *rx_buffer)
         }
     }
 
-    if (s_session.overlap_mode && s_session.proc_task != NULL) {
+    if (s_session.proc_task != NULL) {
         hislip_pending_cmd_t pending;
         while (xQueueReceive(s_session.cmd_queue, &pending, 0) == pdTRUE) {
             free(pending.cmd);
@@ -477,16 +502,18 @@ static void async_loop(int sock, uint8_t *rx_buffer)
             case HISLIP_MSG_ASYNC_DEVICE_CLEAR: {
                 s_session.device_clear_pending = true;
 
-                TaskHandle_t target = s_session.overlap_mode
-                                      ? s_session.proc_task
-                                      : s_session.sync_task;
-                if (target != NULL) {
-                    xTaskNotify(target, DEVICE_CLEAR_BIT, eSetBits);
+                // Notify both the worker task (to abort the current handler via watchdog
+                // timeout) and the sync task (to unblock it if waiting on WORKER_DONE_BIT).
+                if (s_session.proc_task != NULL) {
+                    xTaskNotify(s_session.proc_task, DEVICE_CLEAR_BIT, eSetBits);
+                }
+                if (s_session.sync_task != NULL) {
+                    xTaskNotify(s_session.sync_task, DEVICE_CLEAR_BIT, eSetBits);
                 }
 
                 if (s_session.sync_sock >= 0) {
-                    hislip_send_message(s_session.sync_sock,
-                                        HISLIP_MSG_DEVICE_CLEAR_COMPLETE, 0, 0, NULL, 0);
+                    sync_send(s_session.sync_sock,
+                              HISLIP_MSG_DEVICE_CLEAR_COMPLETE, 0, 0, NULL, 0);
                 }
 
                 if (xSemaphoreTake(s_session.clear_done, pdMS_TO_TICKS(5000)) != pdTRUE) {
@@ -660,6 +687,14 @@ void hislip_server_start(void)
         s_session.async_send_lock = xSemaphoreCreateMutex();
         if (s_session.async_send_lock == NULL) {
             ESP_LOGE(TAG, "Failed to create async send mutex");
+            return;
+        }
+    }
+
+    if (s_session.sync_send_lock == NULL) {
+        s_session.sync_send_lock = xSemaphoreCreateMutex();
+        if (s_session.sync_send_lock == NULL) {
+            ESP_LOGE(TAG, "Failed to create sync send mutex");
             return;
         }
     }
