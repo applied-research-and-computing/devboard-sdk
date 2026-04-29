@@ -175,12 +175,19 @@ bool carbon_wifi_init(void)
 
         network_prov_security_t security =
 #ifdef CONFIG_CARBON_PROVISION_SECURITY_0
-            NETWORK_PROV_SECURITY_0;
+            0;  /* NETWORK_PROV_SECURITY_0 */
+#elif defined(CONFIG_CARBON_PROVISION_SECURITY_1)
+            1;  /* NETWORK_PROV_SECURITY_1 */
 #else
-            NETWORK_PROV_SECURITY_1;
+            2;  /* NETWORK_PROV_SECURITY_2 */
 #endif
+
+#ifdef CONFIG_CARBON_PROVISION_POP
         const char *pop = (strlen(CONFIG_CARBON_PROVISION_POP) > 0)
                           ? CONFIG_CARBON_PROVISION_POP : NULL;
+#else
+        const char *pop = NULL;
+#endif
 
         ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
             security, pop, service_name, NULL));

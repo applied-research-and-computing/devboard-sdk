@@ -81,22 +81,30 @@ menu "Carbon HiSLIP Instrument Configuration"
     choice CARBON_PROVISION_SECURITY
         prompt "Provisioning security level"
         depends on CARBON_ENABLE_WIFI_PROVISIONING
-        default CARBON_PROVISION_SECURITY_1
+        default CARBON_PROVISION_SECURITY_0
         help
             Security scheme used during provisioning.
 
         config CARBON_PROVISION_SECURITY_0
             bool "Security 0 (no encryption)"
+            select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0
             help
-                Credentials transmitted in plaintext. Use only on isolated
-                networks where eavesdropping is not a concern.
+                Credentials transmitted in plaintext. Only suitable for
+                isolated networks. ESP-IDF v6.0 disables this by default;
+                sdkconfig.defaults re-enables it when this option is chosen.
 
         config CARBON_PROVISION_SECURITY_1
-            bool "Security 1 (SRP6a encrypted)"
+            bool "Security 1 (Curve25519 + AES-CTR)"
+            select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
             help
-                Credentials encrypted via SRP6a key exchange. Recommended
-                for all deployments. Optionally combined with a
-                proof-of-possession string (CARBON_PROVISION_POP).
+                Proof-of-possession encryption. Configure the PoP string
+                via CARBON_PROVISION_POP below.
+
+        config CARBON_PROVISION_SECURITY_2
+            bool "Security 2 (SRP6a + AES-GCM, recommended)"
+            help
+                SRP6a key exchange with AES-GCM. Recommended for production;
+                enabled by default in ESP-IDF v6.0. No PoP required.
 
     endchoice
 
@@ -105,9 +113,8 @@ menu "Carbon HiSLIP Instrument Configuration"
         default ""
         depends on CARBON_PROVISION_SECURITY_1
         help
-            Optional string the provisioning app must supply to complete
-            pairing, preventing unauthorized provisioning of nearby devices.
-            Print this on a device label or display it on a screen.
+            String the provisioning app must supply to authenticate.
+            Print it on a device label or display it on screen.
             Leave empty to skip PoP verification.
 
     config CARBON_PROVISION_GPIO_ENABLE
