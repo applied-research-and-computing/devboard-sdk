@@ -21,6 +21,18 @@ plan-*.md
 # Local configuration (contains WiFi credentials)
 sdkconfig
 
+# Python virtual environment
+.venv/
+
+# LSP / editor caches
+.cache/
+
+# Claude Code local settings
+.claude/
+
+# Example build artifacts
+examples/*/build/
+
 # for dev
 plugin_prompts
 sdk-planning/

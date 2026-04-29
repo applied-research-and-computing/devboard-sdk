@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GitHub: `applied-research-and-computing/esp32-sdk`
 
+## Commits and Pull Requests
+
+Never include internal or confidential information in commit messages, PR titles, PR descriptions, or code comments — this repository is public. This covers things like internal hostnames, IP addresses, network credentials, organizational details, personal contact information, or proprietary system names that don't belong in a public SDK.
+
 ## What This Is
 
 The Carbon ESP32 Instrument SDK turns an ESP32 into a network-connected test instrument. It implements the HiSLIP 2.0 protocol (TCP) so the device is controllable via standard VISA/SCPI tooling (e.g., `pyvisa`), and advertises itself via mDNS so clients can find it by hostname without hardcoded IPs.
