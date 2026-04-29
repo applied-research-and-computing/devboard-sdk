@@ -193,12 +193,7 @@ bool carbon_wifi_init(void)
             security, pop, service_name, NULL));
 
         /* Blocks until NETWORK_PROV_END; IP is obtained before this returns */
-        esp_err_t prov_err = network_prov_mgr_wait();
-        if (prov_err != ESP_OK) {
-            ESP_LOGE(TAG, "Provisioning error: %s", esp_err_to_name(prov_err));
-            network_prov_mgr_deinit();
-            return false;
-        }
+        network_prov_mgr_wait();
         /* network_prov_mgr_deinit() already called from NETWORK_PROV_END handler */
     } else {
         /* Already provisioned: connect using NVS-stored credentials */
