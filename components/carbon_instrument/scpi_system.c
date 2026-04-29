@@ -1,5 +1,6 @@
 #include "carbon_instrument.h"
 #include "carbon_registry.h"
+#include "carbon_error_queue.h"
 #include <string.h>
 #include <stdio.h>
 #include "esp_log.h"
@@ -54,6 +55,17 @@ static int jw_dbl(char *buf, size_t *pos, size_t max, double val)
 #define JW_STR(s)  do { if (jw_str(buf, &pos, n, s)    < 0) goto trunc; } while (0)
 #define JW_INT(v)  do { if (jw_dbl(buf, &pos, n, (double)(v)) < 0) goto trunc; } while (0)
 #define JW_DBL(v)  do { if (jw_dbl(buf, &pos, n, v)    < 0) goto trunc; } while (0)
+
+static int error_query_handler(const char *cmd, char *r, size_t n)
+{
+    return carbon_pop_error(r, n);
+}
+
+static int error_count_handler(const char *cmd, char *r, size_t n)
+{
+    snprintf(r, n, "%d", carbon_error_count());
+    return (int)strlen(r);
+}
 
 static int commands_handler(const char *cmd, char *r, size_t n)
 {
@@ -122,15 +134,37 @@ trunc:
 
 void scpi_system_init(void)
 {
-    static const carbon_cmd_descriptor_t cmd = {
-        .scpi_command = "SYSTEM:COMMANDS?",
-        .type         = CARBON_CMD_QUERY,
-        .group        = "System",
-        .description  = "Return all registered commands and device identity as JSON",
-        .param_count  = 0,
-        .timeout_ms   = 2000,
-        .handler      = commands_handler,
+    static const carbon_cmd_descriptor_t cmds[] = {
+        {
+            .scpi_command = "SYST:ERR?",
+            .type         = CARBON_CMD_QUERY,
+            .group        = "System",
+            .description  = "Pop oldest error from queue",
+            .param_count  = 0,
+            .timeout_ms   = 500,
+            .handler      = error_query_handler,
+        },
+        {
+            .scpi_command = "SYST:ERR:COUN?",
+            .type         = CARBON_CMD_QUERY,
+            .group        = "System",
+            .description  = "Return error queue depth",
+            .param_count  = 0,
+            .timeout_ms   = 500,
+            .handler      = error_count_handler,
+        },
+        {
+            .scpi_command = "SYSTEM:COMMANDS?",
+            .type         = CARBON_CMD_QUERY,
+            .group        = "System",
+            .description  = "Return all registered commands and device identity as JSON",
+            .param_count  = 0,
+            .timeout_ms   = 2000,
+            .handler      = commands_handler,
+        },
     };
-    carbon_register_command(&cmd);
+    for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
+        carbon_register_command(&cmds[i]);
+    }
     ESP_LOGI(TAG, "System commands registered");
 }

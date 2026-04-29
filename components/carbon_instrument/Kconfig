@@ -47,4 +47,12 @@ menu "Carbon Instrument SDK"
             overlap mode. Each slot holds a pointer (not an inline buffer),
             so RAM cost is small. Increase if your client pipelines deeply.
 
+    config CARBON_ERROR_QUEUE_SIZE
+        int "SCPI error queue depth"
+        default 16
+        range 4 64
+        help
+            Number of errors stored in the SCPI error queue (SYST:ERR?).
+            Each entry uses 68 bytes (4-byte code + 64-byte message).
+
 endmenu

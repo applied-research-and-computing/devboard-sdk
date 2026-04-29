@@ -1,6 +1,7 @@
 #include "scpi_parser.h"
 #include "scpi_watchdog.h"
 #include "carbon_registry.h"
+#include "carbon_error_queue.h"
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -55,5 +56,6 @@ int scpi_parse_command(const char *cmd_str, char *response_buf, size_t response_
     }
 
     snprintf(response_buf, response_max_len, "ERROR: Unknown command");
+    carbon_push_error(CARBON_ERR_UNDEFINED_COMMAND, "Undefined header");
     return strlen(response_buf);
 }

@@ -1,4 +1,5 @@
 #include "carbon_instrument.h"
+#include "carbon_error_queue.h"
 #include <string.h>
 #include <stdio.h>
 #include "esp_log.h"
@@ -32,6 +33,7 @@ static int cls_handler(const char *cmd, char *r, size_t n)
     if (s_status_byte != NULL) {
         *s_status_byte = 0;
     }
+    carbon_clear_errors();
     snprintf(r, n, "OK");
     return strlen(r);
 }
