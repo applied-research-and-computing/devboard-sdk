@@ -182,7 +182,8 @@ def _qs(val: str) -> str:
 
 # ── YAML renderer ─────────────────────────────────────────────────────────────
 
-def generate_yaml(identity: dict, commands: list, hostname: str, port: int = 4880) -> str:
+def generate_yaml(identity: dict, commands: list, hostname: str, port: int = 4880,
+                  default_address: Optional[str] = None) -> str:
     manufacturer = identity.get("manufacturer", "UNKNOWN")
     model        = identity.get("model",         "UNKNOWN")
     serial       = identity.get("serial",        "")
@@ -217,6 +218,9 @@ def generate_yaml(identity: dict, commands: list, hostname: str, port: int = 488
     ln("  bus:")
     ln("    - type: lan")
     ln(f"      defaultPort: {port}")
+    ln("      protocol: hislip")
+    if default_address:
+        ln(f"      defaultAddress: {default_address}")
     ln("      timeout: 5000")
     ln()
 
@@ -322,9 +326,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate a Carbon profile.yaml from a live ESP32 instrument."
     )
-    parser.add_argument("--host",   required=True, help="Device hostname or IP address")
-    parser.add_argument("--port",   type=int, default=4880, help="HiSLIP port (default 4880)")
-    parser.add_argument("--output", default="-",
+    parser.add_argument("--host",     required=True, help="Device hostname or IP address")
+    parser.add_argument("--port",     type=int, default=4880, help="HiSLIP port (default 4880)")
+    parser.add_argument("--hostname", default=None,
+                        help="mDNS hostname to embed as defaultAddress (e.g. carbon-esp32.local)")
+    parser.add_argument("--output",   default="-",
                         help="Output file path, or - for stdout (default: -)")
     args = parser.parse_args()
 
@@ -355,7 +361,7 @@ def main() -> None:
     print(f"Received {len(commands)} commands.", file=sys.stderr)
 
     # Generate
-    yaml_out = generate_yaml(identity, commands, args.host, args.port)
+    yaml_out = generate_yaml(identity, commands, args.host, args.port, args.hostname)
 
     # Write
     if args.output == "-":

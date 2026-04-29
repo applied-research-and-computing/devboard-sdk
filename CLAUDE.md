@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GitHub: `applied-research-and-computing/esp32-sdk`
 
+The remote is aliased as `db`, not `origin`. Use `git push db <branch>` etc.
+
+## Branches
+
+Work addressing a GitHub issue must be done on a branch named `fix/<description>` (bug fixes) or `feat/<description>` (new features). Push with `git push -u db <branch>` and open PRs against `main`.
+
 ## Commits and Pull Requests
 
 Never include internal or confidential information in commit messages, PR titles, PR descriptions, or code comments — this repository is public. This covers things like internal hostnames, IP addresses, network credentials, organizational details, personal contact information, or proprietary system names that don't belong in a public SDK.
